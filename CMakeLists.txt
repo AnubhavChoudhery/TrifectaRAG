@@ -19,3 +19,12 @@ add_library(trifecta_core STATIC
     src/trifecta_core.cpp
 )
 target_include_directories(trifecta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# ─── Phase 1 Tests ────────────────────────────────────────────────────────────
+add_executable(test_phase1
+    tests/test_phase1.cpp
+)
+target_link_libraries(test_phase1 PRIVATE trifecta_core)
+
+enable_testing()
+add_test(NAME Phase1 COMMAND test_phase1)
