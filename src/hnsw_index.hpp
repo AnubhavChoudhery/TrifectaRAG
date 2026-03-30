@@ -1,10 +1,11 @@
 #pragma once
 
-#include <vector>
+#include <cstdint>
 #include <queue>
 #include <random>
-#include <cstdint>
 #include <utility>
+#include <vector>
+
 #include "trifecta_core.hpp"
 
 namespace trifecta {
@@ -47,6 +48,8 @@ private:
     std::mt19937 generator_;
     
     int get_random_level();
+    void check_dim(const std::vector<float>& vec) const;
+
     float get_distance(uint32_t a, uint32_t b) const;
     float get_distance(const std::vector<float>& vec, uint32_t a) const;
 

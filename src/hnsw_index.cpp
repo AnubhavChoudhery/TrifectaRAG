@@ -1,9 +1,10 @@
 #include "hnsw_index.hpp"
-#include <cmath>
-#include <numeric>
+
 #include <algorithm>
-#include <iostream>
+#include <cmath>
 #include <queue>
+#include <stdexcept>
+#include <string>
 #include <unordered_set>
 
 namespace trifecta {
@@ -22,32 +23,25 @@ HNSWIndex::HNSWIndex(size_t dim, size_t M, size_t ef_construction, size_t max_el
 int HNSWIndex::get_random_level() {
     std::uniform_real_distribution<double> distribution(0.0, 1.0);
     double r = -log(distribution(generator_)) * mult_;
-    return (int)r;
+    return static_cast<int>(r);
+}
+
+void HNSWIndex::check_dim(const std::vector<float>& vec) const {
+    if (vec.size() != dim_) {
+        throw std::invalid_argument(
+            "HNSWIndex: expected vector dimension " + std::to_string(dim_) +
+            ", got " + std::to_string(vec.size()));
+    }
 }
 
 float HNSWIndex::get_distance(uint32_t a, uint32_t b) const {
-    const auto& va = vectors_[a];
-    const auto& vb = vectors_[b];
-    float dot = 0.0f, norm_a = 0.0f, norm_b = 0.0f;
-    for (size_t i = 0; i < dim_; i++) {
-        dot += va[i] * vb[i];
-        norm_a += va[i] * va[i];
-        norm_b += vb[i] * vb[i];
-    }
-    float d = dot / (sqrt(norm_a) * std::sqrt(norm_b));
-    return 1.0f - d; // cosine similarity to distance
+    const float sim = math::cosine_similarity(vectors_[a], vectors_[b]);
+    return 1.0f - sim;
 }
 
 float HNSWIndex::get_distance(const std::vector<float>& vec, uint32_t a) const {
-    const auto& va = vectors_[a];
-    float dot = 0.0f, norm_a = 0.0f, norm_b = 0.0f;
-    for (size_t i = 0; i < dim_; i++) {
-        dot += vec[i] * va[i];
-        norm_a += vec[i] * vec[i];
-        norm_b += va[i] * va[i];
-    }
-    float d = dot / (sqrt(norm_a) * std::sqrt(norm_b));
-    return 1.0f - d;
+    const float sim = math::cosine_similarity(vec, vectors_[a]);
+    return 1.0f - sim;
 }
 
 std::vector<uint32_t> HNSWIndex::select_neighbors(
@@ -59,11 +53,12 @@ std::vector<uint32_t> HNSWIndex::select_neighbors(
         cands_vec.push_back(cands.top());
         cands.pop();
     }
-    std::sort(cands_vec.begin(), cands_vec.end(), [](const auto& a, const auto& b) {
-        return a.first < b.first;
+    std::sort(cands_vec.begin(), cands_vec.end(), [](const auto& x, const auto& y) {
+        return x.first < y.first;
     });
     std::vector<uint32_t> res;
-    for (size_t i = 0; i < std::min(M, cands_vec.size()); i++) {
+    res.reserve(std::min(M, cands_vec.size()));
+    for (size_t i = 0; i < std::min(M, cands_vec.size()); ++i) {
         res.push_back(cands_vec[i].second);
     }
     return res;
@@ -106,7 +101,9 @@ HNSWIndex::search_layer(uint32_t ep, const std::vector<float>& query, size_t ef,
 }
 
 void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
-    uint32_t id = vectors_.size();
+    check_dim(vec);
+
+    uint32_t id = static_cast<uint32_t>(vectors_.size());
     vectors_.push_back(vec);
     id_map_.push_back(global_id);
     int level = get_random_level();
@@ -138,7 +135,11 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
     uint32_t ep = enter_point_;
     for (int l = max_level_; l > level; l--) {
         auto W = search_layer(ep, vec, 1, l);
-        ep = select_neighbors(W, 1)[0];
+        auto picked = select_neighbors(W, 1);
+        if (picked.empty()) {
+            break;
+        }
+        ep = picked[0];
     }
     
     for (int l = std::min(level, max_level_); l >= 0; l--) {
@@ -153,7 +154,9 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
                 links_[l][n].pop_back();
             }
         }
-        ep = W.top().second;
+        if (!W.empty()) {
+            ep = W.top().second;
+        }
     }
     
     if (level > max_level_) {
@@ -163,11 +166,18 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
 }
 
 std::vector<std::pair<uint32_t, float>> HNSWIndex::search(const std::vector<float>& query, size_t k, size_t ef) {
-    if (vectors_.empty()) return {};
+    check_dim(query);
+    if (vectors_.empty()) {
+        return {};
+    }
     uint32_t ep = enter_point_;
     for (int l = max_level_; l > 0; l--) {
         auto W = search_layer(ep, query, 1, l);
-        ep = select_neighbors(W, 1)[0];
+        auto picked = select_neighbors(W, 1);
+        if (picked.empty()) {
+            break;
+        }
+        ep = picked[0];
     }
     auto W = search_layer(ep, query, ef, 0);
     std::vector<std::pair<uint32_t, float>> res;
