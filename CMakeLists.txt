@@ -16,7 +16,8 @@ add_library(trifecta_core STATIC src/trifecta_core.cpp)
 target_include_directories(trifecta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_library(hnsw STATIC src/hnsw_index.cpp)
-target_link_libraries(hnsw PRIVATE trifecta_core)
+target_include_directories(hnsw PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(hnsw PUBLIC trifecta_core)
 
 enable_testing()
 
@@ -25,5 +26,5 @@ target_link_libraries(test_phase1 PRIVATE trifecta_core)
 add_test(NAME Phase1 COMMAND test_phase1)
 
 add_executable(test_phase2 tests/test_phase2.cpp)
-target_link_libraries(test_phase2 PRIVATE hnsw trifecta_core)
-add_test(NAME test_phase2 COMMAND test_phase2)
+target_link_libraries(test_phase2 PRIVATE hnsw)
+add_test(NAME Phase2 COMMAND test_phase2)
