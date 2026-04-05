@@ -28,3 +28,9 @@ add_test(NAME Phase1 COMMAND test_phase1)
 add_executable(test_phase2 tests/test_phase2.cpp)
 target_link_libraries(test_phase2 PRIVATE hnsw)
 add_test(NAME Phase2 COMMAND test_phase2)
+
+add_library(trifecta_core
+    src/trifecta_core.cpp
+    src/hnsw_index.cpp
+    src/lexical_index.cpp
+)
