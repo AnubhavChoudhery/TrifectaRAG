@@ -147,6 +147,14 @@ class TrifectaClient:
         logger.debug("Ingested image gid=%d", gid)
         return gid
 
+    # ── Knowledge Graph ──────────────────────────────────────────────────────
+
+    def add_edge(
+        self, source_id: int, target_id: int, edge_type: tr.EdgeType
+    ) -> None:
+        """Add a directed edge in the knowledge graph between ingested chunks."""
+        self._engine.add_edge(source_id, target_id, edge_type)
+
     # ── Retrieval ────────────────────────────────────────────────────────────
 
     def query(
@@ -196,6 +204,29 @@ class TrifectaClient:
             top_k=top_k,
             search_ef=search_ef,
         )
+
+    # ── Properties ───────────────────────────────────────────────────────────
+
+    @property
+    def size(self) -> int:
+        """Number of ingested chunks."""
+        return self._engine.size
+
+    @property
+    def dim(self) -> int:
+        """Embedding dimensionality."""
+        return self._dim
+
+    @property
+    def device(self) -> str:
+        """Torch device used for model inference."""
+        return self._device
+
+    def __len__(self) -> int:
+        return self._engine.size
+
+    def __repr__(self) -> str:
+        return f"<TrifectaClient size={self.size} dim={self._dim} device={self._device!r}>"
 
     # ── Private ──────────────────────────────────────────────────────────────
 
