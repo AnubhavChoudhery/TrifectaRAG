@@ -116,7 +116,38 @@ class TrifectaClient:
         logger.debug("Ingested document gid=%d len(text)=%d", gid, len(text))
         return gid
 
-    # ── Private: text embedding ──────────────────────────────────────────────
+    def add_image(
+        self,
+        image: ImageInput,
+        caption: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """
+        Ingest an image.
+
+        Generates a CLIP image embedding via transformers, optionally indexes
+        the caption text via BM25, and registers in all C++ indexes.
+
+        Args:
+            image:    File path (str/Path) or PIL Image.
+            caption:  Optional text caption (indexed by BM25).
+            metadata: Optional metadata dictionary.
+
+        Returns:
+            The assigned global_id.
+        """
+        pil_img = self._load_image(image)
+        embedding = self._embed_image(pil_img)
+        gid = self._engine.ingest(
+            text=caption,
+            embedding=embedding.tolist(),
+            metadata=json.dumps(metadata or {}),
+            modality=tr.Modality.IMAGE,
+        )
+        logger.debug("Ingested image gid=%d", gid)
+        return gid
+
+    # ── Private ──────────────────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> np.ndarray:
         """Encode text via sentence-transformers -> float32 numpy vector."""
@@ -124,3 +155,21 @@ class TrifectaClient:
             text, convert_to_numpy=True, show_progress_bar=False
         )
         return np.asarray(vec, dtype=np.float32).flatten()
+
+    def _embed_image(self, image: Image.Image) -> np.ndarray:
+        """Encode a PIL image via CLIP -> float32 numpy vector."""
+        inputs = self._clip_processor(images=image, return_tensors="pt")
+        pixel_values = inputs["pixel_values"].to(self._device)
+        with torch.no_grad():
+            features = self._clip_model.get_image_features(pixel_values=pixel_values)
+        return features.cpu().numpy().astype(np.float32).flatten()
+
+    @staticmethod
+    def _load_image(image: ImageInput) -> Image.Image:
+        """Resolve an image input to a PIL Image in RGB mode."""
+        if isinstance(image, Image.Image):
+            return image.convert("RGB")
+        path = Path(image)
+        if not path.is_file():
+            raise FileNotFoundError(f"Image not found: {path}")
+        return Image.open(path).convert("RGB")
