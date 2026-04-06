@@ -75,8 +75,24 @@ class TrifectaClient:
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("TrifectaClient: device=%s", self._device)
 
+        if SentenceTransformer is None:
+            raise ImportError(
+                "sentence-transformers failed to import (often Keras 3 vs transformers). "
+                "Try: pip install tf-keras"
+            )
+        if CLIPModel is None or CLIPProcessor is None:
+            raise ImportError(
+                "transformers CLIP failed to import. Try: pip install tf-keras"
+            )
+
         self._text_model = SentenceTransformer(text_model, device=self._device)
-        self._dim: int = self._text_model.get_sentence_embedding_dimension()
+        _dim = self._text_model.get_sentence_embedding_dimension()
+        if _dim is None:
+            probe = self._text_model.encode(
+                "dim", convert_to_numpy=True, show_progress_bar=False
+            )
+            _dim = int(np.asarray(probe).reshape(-1).shape[0])
+        self._dim: int = _dim
         logger.info("Text model '%s' loaded, dim=%d", text_model, self._dim)
 
         self._clip_model = CLIPModel.from_pretrained(clip_model).to(self._device)
