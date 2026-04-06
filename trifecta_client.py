@@ -24,8 +24,20 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 from PIL import Image
-from sentence_transformers import SentenceTransformer
-from transformers import CLIPModel, CLIPProcessor
+
+# Lazy-guarded: captured at module level so unittest.mock.patch can replace them.
+# Wrapped in broad except so the module imports cleanly even when optional ML
+# dependencies are absent or have version conflicts (e.g. Keras 3 / tf-keras).
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception:  # pragma: no cover
+    SentenceTransformer = None  # type: ignore[assignment,misc]
+
+try:
+    from transformers import CLIPModel, CLIPProcessor
+except Exception:  # pragma: no cover
+    CLIPModel = None      # type: ignore[assignment,misc]
+    CLIPProcessor = None  # type: ignore[assignment,misc]
 
 import trifecta_py as tr
 
