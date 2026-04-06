@@ -21,7 +21,7 @@ sys.path.insert(0, str(_EX))
 
 import fitz  # PyMuPDF
 
-from textbook_config import DATA_DIR, page_range_for_document, resolve_pdf_path
+from textbook_config import DATA_DIR, page_range_for_document, resolve_pdf_path, snapshot_path
 from trifecta import TrifectaClient, PDFIngestor
 
 
@@ -29,6 +29,12 @@ def run_ingest(pdf: Path, page_range, mode: str) -> None:
     print(f"\n{'=' * 60}")
     print(f"  Ingestion mode: {mode.upper()}")
     print(f"{'=' * 60}")
+
+    snap = snapshot_path(pdf, mode, page_range)
+    if snap.exists():
+        print(f"\n  Snapshot already exists: {snap.name}")
+        print("  Delete it and re-run to force re-ingestion.")
+        return
 
     client = TrifectaClient(device="cpu")
     ingestor = PDFIngestor(
@@ -46,10 +52,16 @@ def run_ingest(pdf: Path, page_range, mode: str) -> None:
     print(f"\n  Results ({mode}):")
     print(f"    Pages processed : {stats['pages']}")
     print(f"    Text chunks     : {stats['text_chunks']}")
-    print(f"    Images extracted: {stats['images']}")
+    print(f"    Images extracted: {stats['images']}  (raster + vector figures)")
     print(f"    KG edges created: {stats['kg_edges']}")
     print(f"    Engine size     : {client.size} nodes")
     print(f"    Time            : {elapsed:.1f}s")
+
+    # Persist: saves all embeddings + metadata + KG edges to a compressed file
+    # so 02/03 examples can reload the engine in seconds without re-ingesting.
+    client.save_snapshot(str(snap))
+    snap_kb = snap.stat().st_size / 1024
+    print(f"    Snapshot        : {snap.name} ({snap_kb:.0f} KB)")
 
 
 def main() -> None:
@@ -74,8 +86,13 @@ def main() -> None:
     run_ingest(pdf, pr, "classical")
 
     print(
-        "\nDone. Extracted images: examples/data/extracted_page/ and "
-        "examples/data/extracted_classical/"
+        "\nDone.\n"
+        "  Images (raster + rendered vector figures):\n"
+        "    examples/data/extracted_page/\n"
+        "    examples/data/extracted_classical/\n"
+        "  Snapshots (fast reload for 02/03):\n"
+        f"    {snapshot_path(pdf, 'page', pr)}\n"
+        f"    {snapshot_path(pdf, 'classical', pr)}"
     )
 
 

@@ -15,8 +15,10 @@ cosine similarity across modalities and mathematically sound late fusion.
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
+import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -107,6 +109,12 @@ class TrifectaClient:
             max_elements=max_elements,
         )
 
+        # Snapshot tracking — populated by add_document / add_image / add_edge
+        # so the full engine state can be serialised and restored without re-
+        # running any PDF extraction or ML inference.
+        self._records: List[Dict[str, Any]] = []
+        self._edge_log: List[Tuple[int, int, str]] = []
+
     # ── Ingestion ────────────────────────────────────────────────────────────
 
     def add_document(
@@ -133,13 +141,18 @@ class TrifectaClient:
         meta = dict(metadata or {})
         meta.setdefault("text_preview", text[:500])
         meta.setdefault("full_text", text)
+        meta_json = json.dumps(meta)
+        emb_list = self._embed_text(text).tolist()
 
-        embedding = self._embed_text(text)
         gid = self._engine.ingest(
             text=text,
-            embedding=embedding.tolist(),
-            metadata=json.dumps(meta),
+            embedding=emb_list,
+            metadata=meta_json,
             modality=tr.Modality.TEXT,
+        )
+        self._records.append(
+            {"gid": gid, "text": text, "embedding": emb_list,
+             "metadata": meta_json, "modality": "TEXT"}
         )
         logger.debug("Ingested document gid=%d len(text)=%d", gid, len(text))
         return gid
@@ -167,14 +180,20 @@ class TrifectaClient:
         meta = dict(metadata or {})
         if isinstance(image, (str, Path)):
             meta.setdefault("image_path", str(Path(image).resolve()))
+        meta_json = json.dumps(meta)
 
         pil_img = self._load_image(image)
-        embedding = self._embed_image(pil_img)
+        emb_list = self._embed_image(pil_img).tolist()
+
         gid = self._engine.ingest(
             text=caption,
-            embedding=embedding.tolist(),
-            metadata=json.dumps(meta),
+            embedding=emb_list,
+            metadata=meta_json,
             modality=tr.Modality.IMAGE,
+        )
+        self._records.append(
+            {"gid": gid, "text": caption, "embedding": emb_list,
+             "metadata": meta_json, "modality": "IMAGE"}
         )
         logger.debug("Ingested image gid=%d", gid)
         return gid
@@ -186,6 +205,127 @@ class TrifectaClient:
     ) -> None:
         """Add a directed edge in the knowledge graph between ingested chunks."""
         self._engine.add_edge(source_id, target_id, edge_type)
+        if edge_type == tr.EdgeType.DEPICTS:
+            etype_str = "DEPICTS"
+        elif edge_type == tr.EdgeType.EXPLAINS:
+            etype_str = "EXPLAINS"
+        else:
+            etype_str = "RELATES_TO"
+        self._edge_log.append((source_id, target_id, etype_str))
+
+    # ── Snapshot persistence ─────────────────────────────────────────────────
+
+    def save_snapshot(self, path: str) -> None:
+        """
+        Serialise the full engine state (records + KG edges) to a gzip-
+        compressed pickle file.  A subsequent call to ``from_snapshot`` can
+        restore the engine in seconds without re-reading the PDF or re-running
+        any ML inference.
+
+        Args:
+            path: Destination path.  A ``.snap.gz`` extension is appended if
+                  the path does not already end with ``.gz``.
+        """
+        p = Path(path)
+        if not str(p).endswith(".gz"):
+            p = Path(str(p) + ".snap.gz") if not str(p).endswith(".snap.gz") else p
+        data = {
+            "version": 1,
+            "dim": self._dim,
+            "records": self._records,
+            "edges": self._edge_log,
+        }
+        with gzip.open(str(p), "wb", compresslevel=5) as f:
+            pickle.dump(data, f, protocol=4)
+        size_kb = p.stat().st_size / 1024
+        logger.info(
+            "Snapshot saved: %d records, %d edges -> %s (%.1f KB)",
+            len(self._records), len(self._edge_log), p, size_kb,
+        )
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot_path: str,
+        text_model: str = DEFAULT_TEXT_MODEL,
+        clip_model: str = DEFAULT_CLIP_MODEL,
+        device: Optional[str] = None,
+        hnsw_M: int = 16,
+        ef_construction: int = 200,
+        max_elements: int = 1_000_000,
+    ) -> "TrifectaClient":
+        """
+        Restore a ``TrifectaClient`` from a snapshot file.
+
+        The ML models are loaded normally (needed for future queries), but
+        the stored text/image embeddings are injected directly into the C++
+        engine — no PDF re-reading, no CLIP/ST inference on the corpus.
+
+        Args:
+            snapshot_path: Path to a ``.snap.gz`` file created by
+                           :meth:`save_snapshot`.
+            text_model:    sentence-transformers model (for query embedding).
+            clip_model:    HuggingFace CLIP model (for query image embedding).
+            device:        Torch device (default: auto).
+            hnsw_M / ef_construction / max_elements: HNSW parameters.
+
+        Returns:
+            A fully-populated ``TrifectaClient``.
+        """
+        sp = Path(snapshot_path)
+        if not sp.exists():
+            raise FileNotFoundError(f"Snapshot not found: {sp}")
+
+        with gzip.open(str(sp), "rb") as f:
+            data = pickle.load(f)
+
+        records: List[Dict[str, Any]] = data["records"]
+        edges: List[Tuple[int, int, str]] = data["edges"]
+        snap_dim: int = data["dim"]
+
+        logger.info(
+            "Loading snapshot %s: %d records, %d edges",
+            sp.name, len(records), len(edges),
+        )
+
+        # Create the client normally (loads ML models, creates empty engine).
+        client = cls(
+            text_model=text_model,
+            clip_model=clip_model,
+            device=device,
+            hnsw_M=hnsw_M,
+            ef_construction=ef_construction,
+            max_elements=max_elements,
+        )
+
+        if client._dim != snap_dim:
+            raise ValueError(
+                f"Model embedding dim ({client._dim}) does not match snapshot "
+                f"dim ({snap_dim}).  Use the same model that created the snapshot."
+            )
+
+        _mod_map = {"TEXT": tr.Modality.TEXT, "IMAGE": tr.Modality.IMAGE}
+        _edge_map = {
+            "RELATES_TO": tr.EdgeType.RELATES_TO,
+            "EXPLAINS": tr.EdgeType.EXPLAINS,
+            "DEPICTS": tr.EdgeType.DEPICTS,
+        }
+
+        for rec in records:
+            client._engine.ingest(
+                text=rec["text"],
+                embedding=rec["embedding"],
+                metadata=rec["metadata"],
+                modality=_mod_map[rec["modality"]],
+            )
+            client._records.append(rec)
+
+        for src, tgt, etype_str in edges:
+            client._engine.add_edge(src, tgt, _edge_map[etype_str])
+            client._edge_log.append((src, tgt, etype_str))
+
+        logger.info("Snapshot loaded: engine has %d nodes", client.size)
+        return client
 
     # ── Retrieval ────────────────────────────────────────────────────────────
 

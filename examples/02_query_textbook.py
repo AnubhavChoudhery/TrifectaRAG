@@ -20,7 +20,13 @@ sys.path.insert(0, str(_EX))
 
 import fitz
 
-from textbook_config import DATA_DIR, page_range_for_document, print_retrieval_result, resolve_pdf_path
+from textbook_config import (
+    DATA_DIR,
+    page_range_for_document,
+    print_retrieval_result,
+    resolve_pdf_path,
+    snapshot_path,
+)
 from trifecta import TrifectaClient, PDFIngestor
 
 # Numerical analysis–style queries (BM25 + CLIP + KG)
@@ -34,7 +40,7 @@ QUERIES = [
 ]
 
 
-def build_engine(mode: str = "page"):
+def build_engine(mode: str = "page") -> TrifectaClient:
     pdf = resolve_pdf_path()
     doc = fitz.open(pdf)
     try:
@@ -43,6 +49,15 @@ def build_engine(mode: str = "page"):
         doc.close()
     pr = page_range_for_document(n, pdf)
 
+    snap = snapshot_path(pdf, mode, pr)
+    if snap.exists():
+        print(f"  Loading from snapshot: {snap.name}  (fast reload -- run 01 to re-ingest)")
+        client = TrifectaClient.from_snapshot(str(snap), device="cpu")
+        print(f"  Engine: {client.size} nodes\n")
+        return client
+
+    print(f"  No snapshot found. Ingesting pages {pr.start + 1}..{pr.stop} ({len(pr)} pages)...")
+    print("  Tip: run 01_ingest_textbook.py first to save a snapshot for fast reloads.\n")
     client = TrifectaClient(device="cpu")
     ingestor = PDFIngestor(client, mode=mode, min_img_px=60)
     stats = ingestor.ingest_pdf(

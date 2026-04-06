@@ -32,6 +32,7 @@ from textbook_config import (
     page_range_for_document,
     print_retrieval_result,
     resolve_pdf_path,
+    snapshot_path,
 )
 from trifecta import TrifectaClient, PDFIngestor
 
@@ -53,7 +54,16 @@ QUESTIONS = [
 
 def build_engine(pdf: Path, n: int) -> TrifectaClient:
     pr = page_range_for_document(n, pdf)
-    print(f"  Ingesting pages {pr.start + 1}..{pr.stop} ({len(pr)} pages)")
+    snap = snapshot_path(pdf, "page", pr)
+
+    if snap.exists():
+        print(f"  Loading from snapshot: {snap.name}  (run 01 to re-ingest)")
+        client = TrifectaClient.from_snapshot(str(snap), device="cpu")
+        print(f"  Engine: {client.size} nodes\n")
+        return client
+
+    print(f"  No snapshot found. Ingesting pages {pr.start + 1}..{pr.stop} ({len(pr)} pages)...")
+    print("  Tip: run 01_ingest_textbook.py first for fast reloads.\n")
     client = TrifectaClient(device="cpu")
     ingestor = PDFIngestor(client, mode="page", min_img_px=60)
     stats = ingestor.ingest_pdf(

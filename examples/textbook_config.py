@@ -94,6 +94,20 @@ def page_range_for_document(num_pages: int, pdf_path: Optional[Path] = None) -> 
     return range(start, end)
 
 
+def snapshot_path(pdf_path: Path, mode: str, page_range: range) -> Path:
+    """
+    Return the canonical path for a snapshot file for the given PDF, mode, and
+    page range.  Example: ``data/Numerical_Analysis_page_p11-444.snap.gz``.
+
+    The snapshot lets examples 02 / 03 reload the engine in ~10 s instead of
+    re-ingesting the full PDF (several minutes).
+    """
+    fname = (
+        f"{pdf_path.stem}_{mode}_p{page_range.start}-{page_range.stop}.snap.gz"
+    )
+    return DATA_DIR / fname
+
+
 def ollama_model() -> str:
     """Return the Ollama model name to use (env override or default)."""
     return os.environ.get("TRIFECTA_OLLAMA_MODEL", "qwen2.5:7b").strip()
