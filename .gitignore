@@ -14,13 +14,22 @@ compile_commands.json
 *.obj
 *.a
 *.lib
-*.dll
 *.exe
-*.so
-*.dylib
 *.pdb
 *.ilk
 *.exp
+
+# pybind11 build outputs (inside trifecta/ package)
+trifecta/*.pyd
+trifecta/*.so
+trifecta/*.dll
+trifecta/*.dylib
+
+# Legacy root-level build artifacts
+/*.pyd
+/*.so
+/*.dll
+/*.dylib
 
 # IDE / editor
 .vs/
@@ -33,10 +42,14 @@ compile_commands.json
 .DS_Store
 Thumbs.db
 
-# Python (future bindings)
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 *.egg-info/
 dist/
+
+# Example data (large PDFs, extracted images)
+examples/data/*
+!examples/data/.gitkeep

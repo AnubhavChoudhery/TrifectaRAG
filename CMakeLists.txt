@@ -67,10 +67,10 @@ pybind11_add_module(trifecta_py src/bindings.cpp)
 target_link_libraries(trifecta_py PRIVATE trifecta_engine)
 target_include_directories(trifecta_py PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-# Place the .pyd / .so at the repo root so `import trifecta_py` works from tests/
+# Place the .pyd / .so inside trifecta/ so the Python package is self-contained
 set_target_properties(trifecta_py PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/trifecta
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/trifecta
 )
 
 # On Windows with MinGW toolchain, copy required runtime DLLs next to the .pyd
@@ -85,7 +85,7 @@ if (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             add_custom_command(TARGET trifecta_py POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${_MINGW_BIN}/${_dll}"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/${_dll}")
+                    "${CMAKE_CURRENT_SOURCE_DIR}/trifecta/${_dll}")
         endif()
     endforeach()
 endif()

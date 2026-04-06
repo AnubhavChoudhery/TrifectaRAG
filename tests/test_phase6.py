@@ -20,8 +20,8 @@ from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from trifecta_client import _normalize, TrifectaClient
-import trifecta_py as tr
+from trifecta.client import _normalize, TrifectaClient
+from trifecta import trifecta_py as tr
 
 # ── Test harness ─────────────────────────────────────────────────────────
 
@@ -174,9 +174,9 @@ DIM = 4
 
 def _make_client():
     """Create a TrifectaClient with mocked embedding models but real C++ engine."""
-    with patch("trifecta_client.SentenceTransformer") as MockST, \
-         patch("trifecta_client.CLIPModel") as MockCLIP, \
-         patch("trifecta_client.CLIPProcessor") as MockProc:
+    with patch("trifecta.client.SentenceTransformer") as MockST, \
+         patch("trifecta.client.CLIPModel") as MockCLIP, \
+         patch("trifecta.client.CLIPProcessor") as MockProc:
 
         # --- Text model: deterministic embeddings keyed by text hash ---
         mock_text = MockST.return_value

@@ -13,10 +13,9 @@ import sys
 import os
 import math
 
-# The .pyd sits at the repo root
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import trifecta_py as tr
+from trifecta import trifecta_py as tr
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

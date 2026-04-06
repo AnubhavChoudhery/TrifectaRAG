@@ -1,19 +1,21 @@
 """
-example_usage.py — Demonstrates the TrifectaClient multi-modal RAG pipeline.
+00_basic_usage.py — Demonstrates the TrifectaClient multi-modal RAG pipeline.
 
 Ingests text documents and (optionally) an image, builds KG edges, then
 queries using text-only and fused multi-modal retrieval.
 
 Usage:
-    python example_usage.py
+    python examples/00_basic_usage.py
 
-    To test image ingestion, place a JPEG at ./sample.jpg before running.
+    To test image ingestion, place a JPEG at ./examples/data/sample.jpg.
 """
 
+import sys
 from pathlib import Path
 
-from trifecta_client import TrifectaClient
-import trifecta_py as tr
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from trifecta import TrifectaClient, trifecta_py as tr
 
 
 def main() -> None:
@@ -21,11 +23,9 @@ def main() -> None:
     print("  TrifectaRAG — Multi-Modal Retrieval Demo")
     print("=" * 60)
 
-    # ── Initialize ────────────────────────────────────────────────────────
     client = TrifectaClient(device="cpu")
     print(f"\nClient ready: {client}\n")
 
-    # ── Ingest text documents ─────────────────────────────────────────────
     id0 = client.add_document(
         text=(
             "The Eiffel Tower is a wrought-iron lattice tower on the "
@@ -53,8 +53,7 @@ def main() -> None:
     )
     print(f"  Ingested text doc  -> gid={id2}")
 
-    # ── Optionally ingest an image ────────────────────────────────────────
-    sample_img = Path("sample.jpg")
+    sample_img = Path(__file__).resolve().parent / "data" / "sample.jpg"
     id3 = None
 
     if sample_img.exists():
@@ -65,27 +64,24 @@ def main() -> None:
         )
         print(f"  Ingested image     -> gid={id3}")
     else:
-        print(f"\n  [Skipping image — place a JPEG at {sample_img.resolve()} to test]")
+        print(f"\n  [Skipping image — place a JPEG at {sample_img} to test]")
 
-    # ── Build knowledge graph edges ───────────────────────────────────────
     client.add_edge(id0, id2, tr.EdgeType.RELATES_TO)
     print(f"\n  KG edge: gid {id0} --RELATES_TO--> gid {id2}")
     if id3 is not None:
         client.add_edge(id0, id3, tr.EdgeType.DEPICTS)
         print(f"  KG edge: gid {id0} --DEPICTS--> gid {id3}")
 
-    # ── Query: text-only ──────────────────────────────────────────────────
     print("\n--- Text-only query: 'Eiffel Tower in Paris' ---")
     results = client.query(text="Eiffel Tower in Paris", top_k=5)
-    for gid, score in results:
-        print(f"  gid={gid:3d}  score={score:.6f}")
+    for r in client.get_results(results):
+        print(f"  [{r['modality']}] gid={r['global_id']:3d}  score={r['score']:.6f}")
 
-    # ── Query: multi-modal (text + image) ─────────────────────────────────
     if id3 is not None and sample_img.exists():
         print("\n--- Multi-modal query: text='Paris landmarks' + image ---")
         results = client.query(text="Paris landmarks", image=sample_img, top_k=5)
-        for gid, score in results:
-            print(f"  gid={gid:3d}  score={score:.6f}")
+        for r in client.get_results(results):
+            print(f"  [{r['modality']}] gid={r['global_id']:3d}  score={r['score']:.6f}")
 
     print(f"\nFinal state: {client}")
     print("Done.")

@@ -1,6 +1,5 @@
 """
-trifecta_client.py — Phase 6: Python front-end for the Trifecta multi-modal
-RAG pipeline.
+trifecta.client — Python front-end for the Trifecta multi-modal RAG pipeline.
 
 Wraps the C++ TrifectaEngine (exposed via pybind11) and provides high-level
 methods for ingesting text/images and performing multi-modal retrieval with
@@ -25,9 +24,6 @@ import numpy as np
 import torch
 from PIL import Image
 
-# Lazy-guarded: captured at module level so unittest.mock.patch can replace them.
-# Wrapped in broad except so the module imports cleanly even when optional ML
-# dependencies are absent or have version conflicts (e.g. Keras 3 / tf-keras).
 try:
     from sentence_transformers import SentenceTransformer
 except Exception:  # pragma: no cover
@@ -39,7 +35,7 @@ except Exception:  # pragma: no cover
     CLIPModel = None      # type: ignore[assignment,misc]
     CLIPProcessor = None  # type: ignore[assignment,misc]
 
-import trifecta_py as tr
+from . import trifecta_py as tr
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +114,14 @@ class TrifectaClient:
         if not text or not text.strip():
             raise ValueError("add_document: text must be non-empty")
 
+        meta = dict(metadata or {})
+        meta.setdefault("text_preview", text[:500])
+
         embedding = self._embed_text(text)
         gid = self._engine.ingest(
             text=text,
             embedding=embedding.tolist(),
-            metadata=json.dumps(metadata or {}),
+            metadata=json.dumps(meta),
             modality=tr.Modality.TEXT,
         )
         logger.debug("Ingested document gid=%d len(text)=%d", gid, len(text))
@@ -148,12 +147,16 @@ class TrifectaClient:
         Returns:
             The assigned global_id.
         """
+        meta = dict(metadata or {})
+        if isinstance(image, (str, Path)):
+            meta.setdefault("image_path", str(Path(image).resolve()))
+
         pil_img = self._load_image(image)
         embedding = self._embed_image(pil_img)
         gid = self._engine.ingest(
             text=caption,
             embedding=embedding.tolist(),
-            metadata=json.dumps(metadata or {}),
+            metadata=json.dumps(meta),
             modality=tr.Modality.IMAGE,
         )
         logger.debug("Ingested image gid=%d", gid)
@@ -217,7 +220,49 @@ class TrifectaClient:
             search_ef=search_ef,
         )
 
+    def get_node(self, global_id: int) -> Dict[str, Any]:
+        """
+        Retrieve stored metadata and modality for a chunk by its global_id.
+
+        Returns:
+            dict with keys: global_id, modality ("TEXT" or "IMAGE"), metadata (parsed dict).
+        """
+        node = self._engine.get_node(global_id)
+        try:
+            meta = json.loads(node.metadata)
+        except (json.JSONDecodeError, TypeError):
+            meta = {"raw": node.metadata}
+        return {
+            "global_id": node.global_id,
+            "modality": "IMAGE" if node.modality == tr.Modality.IMAGE else "TEXT",
+            "metadata": meta,
+        }
+
+    def get_results(
+        self, results: List[Tuple[int, float]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich raw query results with metadata, modality, and score.
+
+        Args:
+            results: Output of query() — list of (global_id, score) tuples.
+
+        Returns:
+            List of dicts: {global_id, score, modality, metadata}.
+        """
+        enriched = []
+        for gid, score in results:
+            info = self.get_node(gid)
+            info["score"] = score
+            enriched.append(info)
+        return enriched
+
     # ── Properties ───────────────────────────────────────────────────────────
+
+    @property
+    def engine(self) -> tr.TrifectaEngine:
+        """Direct access to the underlying C++ engine."""
+        return self._engine
 
     @property
     def size(self) -> int:
