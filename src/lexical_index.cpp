@@ -1,138 +1,203 @@
+/**
+ * =============================================================================
+ * lexical_index.cpp — Phase 3: Lexical Engine (Inverted Index + BM25)
+ * =============================================================================
+ */
+
 #include "lexical_index.hpp"
 
-#include <sstream>
 #include <algorithm>
 #include <cmath>
-#include <unordered_set>
+#include <cctype>
+#include <unordered_map>
 
-LexicalIndex::LexicalIndex()
-    : total_docs_(0), avg_doc_length_(0.0f) {}
+namespace trifecta {
 
+namespace {
 
-std::vector<std::string> LexicalIndex::tokenize(const std::string& text) const {
-    std::vector<std::string> tokens;
-    std::string current;
+bool is_word_byte(unsigned char c) noexcept {
+    return std::isalnum(c) != 0;
+}
 
-    for (char c : text) {
-        if (std::isalnum(c)) {
-            current += std::tolower(c);
+}  // namespace
+
+std::vector<std::string> tokenize(const std::string& text) {
+    std::vector<std::string> out;
+    std::string cur;
+    cur.reserve(32);
+
+    for (unsigned char c : text) {
+        if (is_word_byte(c)) {
+            cur.push_back(static_cast<char>(std::tolower(c)));
         } else {
-            if (!current.empty()) {
-                tokens.push_back(current);
-                current.clear();
+            if (!cur.empty()) {
+                out.push_back(std::move(cur));
+                cur.clear();
             }
         }
     }
-
-    if (!current.empty()) {
-        tokens.push_back(current);
+    if (!cur.empty()) {
+        out.push_back(std::move(cur));
     }
-
-    return tokens;
+    return out;
 }
 
-// ---------------- ADD DOCUMENT ----------------
+void LexicalIndex::rebuild_inverted_for_term(const std::string& term) {
+    auto it_tf = term_doc_tf_.find(term);
+    if (it_tf == term_doc_tf_.end() || it_tf->second.empty()) {
+        inverted_index_.erase(term);
+        return;
+    }
+    std::vector<uint32_t> ids;
+    ids.reserve(it_tf->second.size());
+    for (const auto& p : it_tf->second) {
+        ids.push_back(p.first);
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    inverted_index_[term] = std::move(ids);
+}
+
+void LexicalIndex::remove_document(uint32_t global_id) {
+    auto doc_it = doc_term_tf_.find(global_id);
+    if (doc_it == doc_term_tf_.end()) {
+        return;
+    }
+
+    const std::uint32_t len = doc_lengths_.at(global_id);
+
+    for (const auto& term_tf : doc_it->second) {
+        const std::string& term = term_tf.first;
+        auto t_it = term_doc_tf_.find(term);
+        if (t_it == term_doc_tf_.end()) {
+            continue;
+        }
+        t_it->second.erase(global_id);
+        if (t_it->second.empty()) {
+            term_doc_tf_.erase(t_it);
+            inverted_index_.erase(term);
+        } else {
+            rebuild_inverted_for_term(term);
+        }
+    }
+
+    doc_term_tf_.erase(doc_it);
+    doc_lengths_.erase(global_id);
+    if (document_count_ > 0) {
+        --document_count_;
+    }
+    sum_doc_token_len_ -= len;
+}
+
 void LexicalIndex::add_document(uint32_t global_id, const std::string& text) {
-    auto tokens = tokenize(text);
+    remove_document(global_id);
 
-    if (tokens.empty()) return;
-
-    std::unordered_map<std::string, uint32_t> term_freq;
-    std::unordered_set<std::string> seen_terms;
-
-    for (const auto& token : tokens) {
-        term_freq[token]++;
+    const std::vector<std::string> tokens = tokenize(text);
+    if (tokens.empty()) {
+        return;
     }
 
-    // Update inverted index + doc frequency
-    for (const auto& [term, freq] : term_freq) {
-        inverted_index_[term].push_back(global_id);
+    std::unordered_map<std::string, std::uint32_t> tf;
+    tf.reserve(16);
+    for (const std::string& t : tokens) {
+        ++tf[t];
+    }
 
-        if (seen_terms.insert(term).second) {
-            doc_freqs_[term]++;
+    const std::uint32_t len = static_cast<std::uint32_t>(tokens.size());
+    doc_lengths_[global_id] = len;
+    doc_term_tf_[global_id] = tf;
+
+    for (const auto& p : tf) {
+        const std::string& term = p.first;
+        const std::uint32_t c   = p.second;
+        term_doc_tf_[term][global_id] = c;
+        rebuild_inverted_for_term(term);
+    }
+
+    ++document_count_;
+    sum_doc_token_len_ += len;
+}
+
+float LexicalIndex::average_document_length() const noexcept {
+    if (document_count_ == 0) {
+        return 0.0f;
+    }
+    return static_cast<float>(sum_doc_token_len_) /
+           static_cast<float>(document_count_);
+}
+
+std::uint32_t LexicalIndex::document_frequency(const std::string& term) const {
+    auto it = term_doc_tf_.find(term);
+    if (it == term_doc_tf_.end()) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(it->second.size());
+}
+
+float LexicalIndex::idf(std::size_t num_docs, std::uint32_t df) noexcept {
+    if (num_docs == 0 || df == 0) {
+        return 0.0f;
+    }
+    const float N  = static_cast<float>(num_docs);
+    const float nq = static_cast<float>(df);
+    return std::log(1.0f + (N - nq + 0.5f) / (nq + 0.5f));
+}
+
+std::vector<std::pair<uint32_t, float>> LexicalIndex::score_query(const std::string& query) const {
+    const std::vector<std::string> q_tokens = tokenize(query);
+    if (q_tokens.empty() || document_count_ == 0) {
+        return {};
+    }
+
+    const float avgdl = average_document_length();
+    if (avgdl <= 0.0f) {
+        return {};
+    }
+
+    const std::size_t N = document_count_;
+
+    std::unordered_map<uint32_t, float> acc;
+    acc.reserve(32);
+
+    for (const std::string& term : q_tokens) {
+        auto t_it = term_doc_tf_.find(term);
+        if (t_it == term_doc_tf_.end()) {
+            continue;
+        }
+        const std::uint32_t df = static_cast<std::uint32_t>(t_it->second.size());
+        const float idf_t      = idf(N, df);
+
+        for (const auto& doc_tf : t_it->second) {
+            const uint32_t gid = doc_tf.first;
+            const std::uint32_t tf = doc_tf.second;
+            const std::uint32_t dl = doc_lengths_.at(gid);
+            const float len_ratio =
+                static_cast<float>(dl) / avgdl;
+            const float denom =
+                static_cast<float>(tf) +
+                k1_ * (1.0f - b_ + b_ * len_ratio);
+            if (denom <= 0.0f) {
+                continue;
+            }
+            const float score =
+                idf_t * (static_cast<float>(tf) * (k1_ + 1.0f)) / denom;
+            acc[gid] += score;
         }
     }
 
-    doc_term_freqs_[global_id] = std::move(term_freq);
-    doc_lengths_[global_id] = tokens.size();
-
-    total_docs_++;
-}
-
-// ---------------- FINALIZE ----------------
-void LexicalIndex::finalize() {
-    if (total_docs_ == 0) return;
-
-    uint64_t total_length = 0;
-    for (const auto& [doc_id, length] : doc_lengths_) {
-        total_length += length;
+    std::vector<std::pair<uint32_t, float>> out;
+    out.reserve(acc.size());
+    for (auto& p : acc) {
+        out.push_back(std::move(p));
     }
-
-    avg_doc_length_ = static_cast<float>(total_length) / total_docs_;
-}
-
-// ---------------- BM25 ----------------
-float LexicalIndex::compute_bm25(
-    uint32_t doc_id,
-    const std::string& term,
-    uint32_t term_freq
-) const {
-    auto df_it = doc_freqs_.find(term);
-    if (df_it == doc_freqs_.end()) return 0.0f;
-
-    float df = static_cast<float>(df_it->second);
-
-    // IDF
-    float idf = std::log(
-        (total_docs_ - df + 0.5f) / (df + 0.5f) + 1.0f
-    );
-
-    float doc_len = static_cast<float>(doc_lengths_.at(doc_id));
-
-    float numerator = term_freq * (k1_ + 1.0f);
-    float denominator = term_freq +
-        k1_ * (1.0f - b_ + b_ * (doc_len / avg_doc_length_));
-
-    return idf * (numerator / denominator);
-}
-
-// ---------------- SEARCH ----------------
-std::vector<std::pair<uint32_t, float>>
-LexicalIndex::search(const std::string& query) const {
-    std::vector<std::pair<uint32_t, float>> results;
-
-    auto query_tokens = tokenize(query);
-    if (query_tokens.empty()) return results;
-
-    std::unordered_map<uint32_t, float> scores;
-
-    for (const auto& term : query_tokens) {
-        auto it = inverted_index_.find(term);
-        if (it == inverted_index_.end()) continue;
-
-        const auto& doc_list = it->second;
-
-        for (uint32_t doc_id : doc_list) {
-            auto tf_it = doc_term_freqs_.at(doc_id).find(term);
-            if (tf_it == doc_term_freqs_.at(doc_id).end()) continue;
-
-            uint32_t tf = tf_it->second;
-
-            float score = compute_bm25(doc_id, term, tf);
-            scores[doc_id] += score;
-        }
-    }
-
-    // Convert to vector
-    for (const auto& [doc_id, score] : scores) {
-        results.emplace_back(doc_id, score);
-    }
-
-    // Sort descending
-    std::sort(results.begin(), results.end(),
-        [](const auto& a, const auto& b) {
+    std::sort(out.begin(), out.end(), [](const std::pair<uint32_t, float>& a,
+                                         const std::pair<uint32_t, float>& b) {
+        if (a.second != b.second) {
             return a.second > b.second;
-        });
-
-    return results;
+        }
+        return a.first < b.first;
+    });
+    return out;
 }
+
+}  // namespace trifecta

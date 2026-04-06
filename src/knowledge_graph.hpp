@@ -1,41 +1,51 @@
-#ifndef KNOWLEDGE_GRAPH_HPP
-#define KNOWLEDGE_GRAPH_HPP
+/**
+ * =============================================================================
+ * knowledge_graph.hpp — Phase 4: Knowledge Graph (Adjacency + BFS)
+ * =============================================================================
+ */
+
+#pragma once
 
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
-#include <unordered_set>
 
+namespace trifecta {
 
-enum class EdgeType {
-    RELATES_TO,
+enum class EdgeType : std::uint8_t {
+    RELATES_TO = 0,
     EXPLAINS,
-    DEPICTS
+    DEPICTS,
 };
-
 
 struct Edge {
     uint32_t target_id;
     EdgeType type;
 };
 
-// ---------------- KNOWLEDGE GRAPH ----------------
+/**
+ * Directed adjacency list for relational context between GlobalRegistry chunks.
+ */
 class KnowledgeGraph {
 public:
     KnowledgeGraph() = default;
 
-    // Add directed edge: source -> target
     void add_edge(uint32_t source_id, uint32_t target_id, EdgeType type);
 
-    // Get all neighbors (edges) of a node
-    const std::vector<Edge>& get_neighbors(uint32_t node_id) const;
+    [[nodiscard]] const std::unordered_map<uint32_t, std::vector<Edge>>& adjacency() const noexcept {
+        return adj_;
+    }
 
-    // BFS 1-hop expansion (returns unique node IDs)
-    std::vector<uint32_t> expand_1hop(const std::vector<uint32_t>& seed_ids) const;
+    /**
+     * Breadth-first expansion limited to depth 1: collect unique target global_ids
+     * reachable from any seed in one hop (outgoing edges only). Result sorted
+     * ascending for stable tests and cache-friendly iteration.
+     */
+    [[nodiscard]] std::vector<uint32_t> bfs_one_hop_neighbors(
+        const std::vector<uint32_t>& seed_ids) const;
 
 private:
-    // Adjacency list
-    std::unordered_map<uint32_t, std::vector<Edge>> adjacency_list_;
+    std::unordered_map<uint32_t, std::vector<Edge>> adj_;
 };
 
-#endif
+}  // namespace trifecta

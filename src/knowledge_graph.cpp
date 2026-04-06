@@ -1,47 +1,47 @@
+/**
+ * =============================================================================
+ * knowledge_graph.cpp — Phase 4: Knowledge Graph (Adjacency + BFS)
+ * =============================================================================
+ */
+
 #include "knowledge_graph.hpp"
 
+#include <algorithm>
 #include <queue>
+#include <unordered_set>
 
+namespace trifecta {
 
-void KnowledgeGraph::add_edge(uint32_t source_id,
-                             uint32_t target_id,
-                             EdgeType type) {
-    adjacency_list_[source_id].push_back(Edge{target_id, type});
+void KnowledgeGraph::add_edge(uint32_t source_id, uint32_t target_id, EdgeType type) {
+    adj_[source_id].push_back(Edge{target_id, type});
 }
 
-const std::vector<Edge>& KnowledgeGraph::get_neighbors(uint32_t node_id) const {
-    static const std::vector<Edge> empty;
-
-    auto it = adjacency_list_.find(node_id);
-    if (it == adjacency_list_.end()) {
-        return empty;
+std::vector<uint32_t> KnowledgeGraph::bfs_one_hop_neighbors(
+    const std::vector<uint32_t>& seed_ids) const {
+    std::queue<uint32_t> q;
+    for (uint32_t s : seed_ids) {
+        q.push(s);
     }
 
-    return it->second;
-}
+    std::unordered_set<uint32_t> collected;
+    std::vector<uint32_t> out;
 
-
-std::vector<uint32_t>
-KnowledgeGraph::expand_1hop(const std::vector<uint32_t>& seed_ids) const {
-    std::unordered_set<uint32_t> visited;
-    std::vector<uint32_t> result;
-
-
-    for (uint32_t id : seed_ids) {
-        visited.insert(id);
-    }
-
-   
-    for (uint32_t source_id : seed_ids) {
-        auto it = adjacency_list_.find(source_id);
-        if (it == adjacency_list_.end()) continue;
-
-        for (const Edge& edge : it->second) {
-            if (visited.insert(edge.target_id).second) {
-                result.push_back(edge.target_id);
+    while (!q.empty()) {
+        const uint32_t u = q.front();
+        q.pop();
+        auto it = adj_.find(u);
+        if (it == adj_.end()) {
+            continue;
+        }
+        for (const Edge& e : it->second) {
+            if (collected.insert(e.target_id).second) {
+                out.push_back(e.target_id);
             }
         }
     }
 
-    return result;
+    std::sort(out.begin(), out.end());
+    return out;
 }
+
+}  // namespace trifecta
