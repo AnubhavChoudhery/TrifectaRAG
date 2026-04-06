@@ -34,6 +34,7 @@ using namespace pybind11::literals;
 
 using trifecta::EdgeType;
 using trifecta::Modality;
+using trifecta::NodeData;
 using trifecta::TrifectaEngine;
 
 PYBIND11_MODULE(trifecta_py, m) {
@@ -56,6 +57,22 @@ PYBIND11_MODULE(trifecta_py, m) {
         .value("EXPLAINS",   EdgeType::EXPLAINS)
         .value("DEPICTS",    EdgeType::DEPICTS)
         .export_values();
+
+    // ── NodeData (read-only) ─────────────────────────────────────────────
+    py::class_<NodeData>(m, "NodeData",
+        "Read-only view of a chunk stored in the GlobalRegistry.")
+        .def_readonly("global_id", &NodeData::global_id,
+            "Dense 0-based identifier.")
+        .def_property_readonly("modality",
+            [](const NodeData& n) { return n.type; },
+            "Chunk modality (Modality.TEXT or Modality.IMAGE).")
+        .def_readonly("metadata", &NodeData::metadata_payload,
+            "Arbitrary metadata string (typically JSON).")
+        .def("__repr__", [](const NodeData& n) {
+            return "<NodeData gid=" + std::to_string(n.global_id) +
+                   " type=" + std::string(trifecta::modality_to_str(n.type)) +
+                   ">";
+        });
 
     // ── TrifectaEngine ────────────────────────────────────────────────────
     py::class_<TrifectaEngine>(m, "TrifectaEngine",
@@ -148,6 +165,24 @@ Raises:
              "query_text"_a,
              "top_k"_a     = TrifectaEngine::kDefaultTopK,
              "search_ef"_a = TrifectaEngine::kDefaultSearchEf)
+
+        // ── get_node ─────────────────────────────────────────────────────
+        .def("get_node",
+             &TrifectaEngine::get_node,
+             R"doc(
+Retrieve stored NodeData for a chunk by global_id.
+
+Args:
+    global_id (int): The id returned by ingest().
+
+Returns:
+    NodeData: Read-only object with global_id, modality, metadata fields.
+
+Raises:
+    IndexError: If global_id is out of range.
+             )doc",
+             "global_id"_a,
+             py::return_value_policy::reference_internal)
 
         // ── read-only properties ─────────────────────────────────────────
         .def_property_readonly("size",

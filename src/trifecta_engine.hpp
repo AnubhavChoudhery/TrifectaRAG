@@ -135,6 +135,11 @@ public:
     [[nodiscard]] const LexicalIndex&  lexical()    const noexcept { return lexical_;  }
     [[nodiscard]] const KnowledgeGraph& graph()     const noexcept { return kg_;       }
 
+    /** O(1) lookup — returns the NodeData stored in the registry for a given id. */
+    [[nodiscard]] const NodeData& get_node(uint32_t id) const {
+        return registry_.get_node(id);
+    }
+
 private:
     std::size_t    dim_;
     GlobalRegistry registry_;
