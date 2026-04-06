@@ -12,7 +12,11 @@ else()
                         -ftree-vectorize -Wall -Wextra)
 endif()
 
-add_library(trifecta_core STATIC src/trifecta_core.cpp)
+add_library(trifecta_core STATIC
+    src/trifecta_core.cpp
+    src/lexical_index.cpp
+    src/knowledge_graph.cpp
+)
 target_include_directories(trifecta_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_library(hnsw STATIC src/hnsw_index.cpp)
@@ -29,8 +33,6 @@ add_executable(test_phase2 tests/test_phase2.cpp)
 target_link_libraries(test_phase2 PRIVATE hnsw)
 add_test(NAME Phase2 COMMAND test_phase2)
 
-add_library(trifecta_core
-    src/trifecta_core.cpp
-    src/hnsw_index.cpp
-    src/lexical_index.cpp
-)
+add_executable(test_phase3_4 tests/test_phase3_4.cpp)
+target_link_libraries(test_phase3_4 PRIVATE trifecta_core)
+add_test(NAME Phase3_4 COMMAND test_phase3_4)
