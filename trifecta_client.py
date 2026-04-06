@@ -82,3 +82,45 @@ class TrifectaClient:
             ef_construction=ef_construction,
             max_elements=max_elements,
         )
+
+    # ── Ingestion ────────────────────────────────────────────────────────────
+
+    def add_document(
+        self,
+        text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """
+        Ingest a text document.
+
+        Generates a text embedding via sentence-transformers, registers the
+        chunk in all C++ indexes (GlobalRegistry, HNSW, BM25).
+
+        Args:
+            text:     Raw text content (must be non-empty).
+            metadata: Optional metadata dictionary (serialized to JSON).
+
+        Returns:
+            The assigned global_id.
+        """
+        if not text or not text.strip():
+            raise ValueError("add_document: text must be non-empty")
+
+        embedding = self._embed_text(text)
+        gid = self._engine.ingest(
+            text=text,
+            embedding=embedding.tolist(),
+            metadata=json.dumps(metadata or {}),
+            modality=tr.Modality.TEXT,
+        )
+        logger.debug("Ingested document gid=%d len(text)=%d", gid, len(text))
+        return gid
+
+    # ── Private: text embedding ──────────────────────────────────────────────
+
+    def _embed_text(self, text: str) -> np.ndarray:
+        """Encode text via sentence-transformers -> float32 numpy vector."""
+        vec = self._text_model.encode(
+            text, convert_to_numpy=True, show_progress_bar=False
+        )
+        return np.asarray(vec, dtype=np.float32).flatten()
