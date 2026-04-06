@@ -36,7 +36,7 @@ def build(mode: str) -> TrifectaClient:
         n = len(doc)
     finally:
         doc.close()
-    pr = page_range_for_document(n)
+    pr = page_range_for_document(n, pdf)
 
     client = TrifectaClient(device="cpu")
     ingestor = PDFIngestor(

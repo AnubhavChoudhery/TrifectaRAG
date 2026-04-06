@@ -108,6 +108,9 @@ class PDFIngestor:
         }
 
         prev_page_gid: Optional[int] = None
+        # Deduplicate images by PDF xref so the same asset (e.g. a logo or a
+        # figure reused across pages) is only embedded and stored once.
+        seen_xrefs: set = set()
 
         for page_idx in pages_to_process:
             if page_idx >= len(doc):
@@ -152,6 +155,9 @@ class PDFIngestor:
             img_list = page.get_images(full=True)
             for img_idx, img_info in enumerate(img_list):
                 xref = img_info[0]
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
                 try:
                     base_image = doc.extract_image(xref)
                 except Exception:

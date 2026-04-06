@@ -41,7 +41,7 @@ def build_engine(mode: str = "page"):
         n = len(doc)
     finally:
         doc.close()
-    pr = page_range_for_document(n)
+    pr = page_range_for_document(n, pdf)
 
     client = TrifectaClient(device="cpu")
     ingestor = PDFIngestor(client, mode=mode, min_img_px=60)

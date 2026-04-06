@@ -62,16 +62,13 @@ def main() -> None:
     finally:
         doc.close()
 
-    pr = page_range_for_document(n)
-    if pr is None:
-        print(f"  PDF: {pdf}")
-        print(f"  Size: {pdf.stat().st_size / 1024 ** 2:.1f} MB  |  pages: {n} (full document)")
-    else:
-        print(f"  PDF: {pdf}")
-        print(
-            f"  Page range: {pr.start + 1}–{pr.stop} "
-            f"(0-based indices {pr.start} .. {pr.stop - 1})"
-        )
+    pr = page_range_for_document(n, pdf)
+    print(f"  PDF: {pdf}")
+    print(
+        f"  Size: {pdf.stat().st_size / 1024 ** 2:.1f} MB  |  "
+        f"pages: {n} total, ingesting pages {pr.start + 1}..{pr.stop} "
+        f"(0-based {pr.start}..{pr.stop - 1})"
+    )
 
     run_ingest(pdf, pr, "page")
     run_ingest(pdf, pr, "classical")

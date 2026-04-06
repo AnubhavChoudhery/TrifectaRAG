@@ -4,11 +4,16 @@ Shared settings for textbook PDF examples.
 Place your PDF under examples/data/ (default: Numerical_Analysis.pdf) or set
 TRIFECTA_TEXTBOOK_PDF to an absolute path.
 
-Optional page window (0-based indices, end exclusive):
-  TRIFECTA_PAGE_START=0
-  TRIFECTA_PAGE_END=50
-If both are unset, all pages are processed. If only TRIFECTA_PAGE_START is set,
-pages from that index through the end of the document are used.
+Page window env vars (0-based, end exclusive):
+  TRIFECTA_PAGE_START=<int>        explicit start page index
+  TRIFECTA_PAGE_END=<int>          explicit end page index (exclusive)
+  TRIFECTA_FRONT_MATTER_PAGES=<int> pages to skip from the front
+    If none are set, a sensible default is chosen per known PDF filename.
+    Known defaults:
+      Numerical_Analysis   -> 11  (cover, title, publisher, 4x ToC, 4x preface)
+
+Ollama:
+  TRIFECTA_OLLAMA_MODEL=<model>    default: qwen2.5:7b
 """
 
 from __future__ import annotations
@@ -19,6 +24,11 @@ from typing import Optional
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DEFAULT_PDF_NAME = "Numerical_Analysis.pdf"
+
+# Front-matter page counts for known PDFs (0-based, i.e. skip first N pages).
+_FRONT_MATTER: dict[str, int] = {
+    "Numerical_Analysis": 11,
+}
 
 
 def resolve_pdf_path() -> Path:
@@ -51,28 +61,48 @@ def resolve_pdf_path() -> Path:
     return pdfs[0].resolve()
 
 
-def page_range_for_document(num_pages: int) -> Optional[range]:
+def page_range_for_document(num_pages: int, pdf_path: Optional[Path] = None) -> range:
     """
-    Return None to mean \"all pages\" for PDFIngestor.ingest_pdf, or a bounded
-    range after reading *num_pages* from the opened PDF.
+    Return range(start, end) for PDFIngestor based on env vars and known defaults.
+
+    Priority:
+      1. TRIFECTA_PAGE_START / TRIFECTA_PAGE_END (explicit window)
+      2. TRIFECTA_FRONT_MATTER_PAGES (skip N front pages, go to end)
+      3. Known per-filename front-matter table
+      4. Full document (range(0, num_pages))
     """
     start_s = os.environ.get("TRIFECTA_PAGE_START", "").strip()
     end_s = os.environ.get("TRIFECTA_PAGE_END", "").strip()
-    if not start_s and not end_s:
-        return None
-    start = max(0, int(start_s or "0"))
-    if not end_s:
-        return range(start, num_pages)
-    end = min(int(end_s), num_pages)
+    fm_s = os.environ.get("TRIFECTA_FRONT_MATTER_PAGES", "").strip()
+
+    if start_s:
+        start = max(0, int(start_s))
+    elif fm_s:
+        start = max(0, int(fm_s))
+    elif pdf_path is not None:
+        start = _FRONT_MATTER.get(pdf_path.stem, 0)
+    else:
+        start = 0
+
+    end = min(int(end_s), num_pages) if end_s else num_pages
+
     if end <= start:
-        raise ValueError("TRIFECTA_PAGE_END must be greater than TRIFECTA_PAGE_START")
+        raise ValueError(
+            f"Content page range is empty: start={start}, end={end}. "
+            "Check TRIFECTA_PAGE_START / TRIFECTA_PAGE_END / TRIFECTA_FRONT_MATTER_PAGES."
+        )
     return range(start, end)
+
+
+def ollama_model() -> str:
+    """Return the Ollama model name to use (env override or default)."""
+    return os.environ.get("TRIFECTA_OLLAMA_MODEL", "qwen2.5:7b").strip()
 
 
 def print_retrieval_result(r: dict, *, max_text_chars: Optional[int] = None) -> None:
     """
     Print one enriched query hit: full text for TEXT chunks, paths + caption
-    for IMAGE chunks (tables/figures are stored as raster images from the PDF).
+    for IMAGE chunks (figures / rasterized tables from the PDF).
     """
     meta = r["metadata"]
     gid = r["global_id"]
