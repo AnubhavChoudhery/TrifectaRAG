@@ -147,6 +147,56 @@ class TrifectaClient:
         logger.debug("Ingested image gid=%d", gid)
         return gid
 
+    # ── Retrieval ────────────────────────────────────────────────────────────
+
+    def query(
+        self,
+        text: Optional[str] = None,
+        image: Optional[ImageInput] = None,
+        top_k: int = 10,
+        search_ef: int = 50,
+    ) -> List[Tuple[int, float]]:
+        """
+        Multi-modal query with optional late fusion.
+
+        Late fusion (both *text* and *image* provided):
+          1. Embed text  -> v_t;  embed image -> v_i
+          2. Normalize:   v_t' = v_t / ||v_t||,  v_i' = v_i / ||v_i||
+          3. Fuse:        v_f  = normalize(v_t' + v_i')
+          4. Send v_f + raw text to the C++ query engine.
+
+        Args:
+            text:      Query text (drives BM25 + optional HNSW).
+            image:     Query image path or PIL Image (drives HNSW).
+            top_k:     Maximum results to return.
+            search_ef: HNSW search ef parameter.
+
+        Returns:
+            List of (global_id, rrf_score) tuples, descending by score.
+        """
+        if text is None and image is None:
+            return []
+
+        query_text = text or ""
+        query_vec: List[float] = []
+
+        if text is not None and image is not None:
+            text_vec = _normalize(self._embed_text(text))
+            img_vec = _normalize(self._embed_image(self._load_image(image)))
+            fused = _normalize(text_vec + img_vec)
+            query_vec = fused.tolist()
+        elif image is not None:
+            query_vec = self._embed_image(self._load_image(image)).tolist()
+        elif text is not None:
+            query_vec = self._embed_text(text).tolist()
+
+        return self._engine.query(
+            query_vec=query_vec,
+            query_text=query_text,
+            top_k=top_k,
+            search_ef=search_ef,
+        )
+
     # ── Private ──────────────────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> np.ndarray:
