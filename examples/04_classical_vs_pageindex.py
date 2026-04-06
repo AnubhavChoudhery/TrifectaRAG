@@ -1,45 +1,56 @@
 """
-04_classical_vs_pageindex.py — Compare classical chunk-based RAG vs
-page-indexed RAG on the same PDF and queries.
+04_classical_vs_pageindex.py — Compare page-indexed vs classical chunk
+retrieval on the same local textbook PDF.
 
 Usage:
     python examples/04_classical_vs_pageindex.py
 """
 
+from __future__ import annotations
+
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_EX = Path(__file__).resolve().parent
+sys.path.insert(0, str(_EX.parent))
+sys.path.insert(0, str(_EX))
 
+import fitz
+
+from textbook_config import DATA_DIR, page_range_for_document, resolve_pdf_path
 from trifecta import TrifectaClient, PDFIngestor
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-PDF_PATH = DATA_DIR / "openstax_calculus_v1.pdf"
-
-PAGE_START = 249
-PAGE_END = 318
-
 QUERIES = [
-    "What is the chain rule?",
-    "derivative of sin(x)",
-    "power rule for differentiation",
-    "implicit differentiation",
+    "Newton method",
+    "interpolation polynomial",
+    "numerical integration",
+    "LU decomposition",
 ]
 
 
 def build(mode: str) -> TrifectaClient:
+    pdf = resolve_pdf_path()
+    doc = fitz.open(pdf)
+    try:
+        n = len(doc)
+    finally:
+        doc.close()
+    pr = page_range_for_document(n)
+
     client = TrifectaClient(device="cpu")
-    ingestor = PDFIngestor(client, mode=mode, chunk_size=256, overlap=64, min_img_px=60)
-    stats = ingestor.ingest_pdf(
-        str(PDF_PATH),
+    ingestor = PDFIngestor(
+        client, mode=mode, chunk_size=256, overlap=64, min_img_px=60
+    )
+    ingestor.ingest_pdf(
+        str(pdf),
         output_dir=str(DATA_DIR / f"extracted_{mode}"),
-        page_range=range(PAGE_START, PAGE_END),
+        page_range=pr,
     )
     return client
 
 
-def query_mode(client: TrifectaClient, label: str) -> dict:
+def query_mode(client: TrifectaClient):
     results_by_query = {}
     for q in QUERIES:
         t0 = time.perf_counter()
@@ -57,16 +68,16 @@ def format_result(r: dict) -> str:
     score = r["score"]
     if tag == "IMAGE":
         return f"[IMG p{page}] {score:.4f}"
-    preview = meta.get("text_preview", "")[:50].replace("\n", " ")
+    preview = (meta.get("full_text") or meta.get("text_preview", ""))[:50].replace(
+        "\n", " "
+    )
     return f"[p{page}] {score:.4f} {preview}..."
 
 
 def main() -> None:
-    if not PDF_PATH.exists():
-        print("ERROR: PDF not found. Run 01_ingest_math_book.py first.")
-        sys.exit(1)
+    resolve_pdf_path()
 
-    print("TrifectaRAG — Classical vs Page-Index Comparison")
+    print("TrifectaRAG — Classical vs page-index (Numerical Analysis PDF)")
     print("=" * 70)
 
     print("\nBuilding page-indexed engine...", end=" ", flush=True)
@@ -81,10 +92,12 @@ def main() -> None:
     chunk_time = time.perf_counter() - t0
     print(f"({chunk_time:.1f}s, {chunk_client.size} nodes)")
 
-    page_results = query_mode(page_client, "page")
-    chunk_results = query_mode(chunk_client, "classical")
+    page_results = query_mode(page_client)
+    chunk_results = query_mode(chunk_client)
 
-    print(f"\n{'Query':<35s} | {'Page-indexed':<40s} | {'Classical (chunked)':<40s}")
+    print(
+        f"\n{'Query':<35s} | {'Page-indexed (top-1)':<40s} | {'Classical (top-1)':<40s}"
+    )
     print("-" * 120)
 
     for q in QUERIES:
@@ -97,11 +110,7 @@ def main() -> None:
         print(f"{q:<35s} | {page_top:<40s} | {chunk_top:<40s}")
 
     print()
-    print("Observations:")
-    print("  - Page-indexed mode preserves full page context (better for long answers).")
-    print("  - Classical mode finds more specific chunk matches (better for precise facts).")
-    print("  - KG expansion (RELATES_TO between consecutive pages) gives page-indexed")
-    print("    mode access to surrounding pages automatically.")
+    print("For full chunk text and image paths, run: python examples/02_query_textbook.py")
     print("\nDone.")
 
 

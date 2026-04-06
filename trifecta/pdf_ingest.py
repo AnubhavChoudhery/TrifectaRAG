@@ -175,14 +175,16 @@ class PDFIngestor:
                 except Exception:
                     continue
 
+                cap = f"Figure from {src_name}, page {page_num}"
                 img_gid = self._client.add_image(
                     image=pil_img,
-                    caption=f"Figure from {src_name}, page {page_num}",
+                    caption=cap,
                     metadata={
                         "source": src_name,
                         "page": page_num,
                         "type": "figure",
                         "image_path": str(img_path.resolve()),
+                        "caption": cap,
                     },
                 )
                 stats["images"] += 1

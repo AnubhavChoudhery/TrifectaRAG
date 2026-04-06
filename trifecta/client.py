@@ -132,6 +132,7 @@ class TrifectaClient:
 
         meta = dict(metadata or {})
         meta.setdefault("text_preview", text[:500])
+        meta.setdefault("full_text", text)
 
         embedding = self._embed_text(text)
         gid = self._engine.ingest(
