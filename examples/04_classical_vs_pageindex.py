@@ -84,13 +84,13 @@ def main() -> None:
     t0 = time.perf_counter()
     page_client = build("page")
     page_time = time.perf_counter() - t0
-    print(f"({page_time:.1f}s, {page_client.size} nodes)")
+    print(f"({page_time:.1f}s, {page_client.size} nodes, {page_client.page_count} pages)")
 
     print("Building classical engine...", end=" ", flush=True)
     t0 = time.perf_counter()
     chunk_client = build("classical")
     chunk_time = time.perf_counter() - t0
-    print(f"({chunk_time:.1f}s, {chunk_client.size} nodes)")
+    print(f"({chunk_time:.1f}s, {chunk_client.size} nodes, {chunk_client.page_count} pages)")
 
     page_results = query_mode(page_client)
     chunk_results = query_mode(chunk_client)

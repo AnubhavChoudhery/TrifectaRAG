@@ -102,16 +102,21 @@ def page_range_for_document(num_pages: int, pdf_path: Optional[Path] = None) -> 
 
 def snapshot_path(pdf_path: Path, mode: str, page_range: range) -> Path:
     """
-    Return the canonical path for a snapshot file for the given PDF, mode, and
-    page range.  Example: ``data/Numerical_Analysis_page_p11-444.snap.gz``.
+    Return the canonical *base* path for snapshot files.
 
-    The snapshot lets examples 02 / 03 reload the engine in ~10 s instead of
-    re-ingesting the full PDF (several minutes).
+    The new v3 format creates two files:
+      ``<stem>.trifecta`` (binary engine) and ``<stem>.meta.gz`` (metadata).
+    Legacy code that checked ``snap.exists()`` should use ``snapshot_exists()``
+    instead, or check for the ``.trifecta`` file.
     """
-    fname = (
-        f"{pdf_path.stem}_{mode}_p{page_range.start}-{page_range.stop}.snap.gz"
-    )
-    return DATA_DIR / fname
+    stem = f"{pdf_path.stem}_{mode}_p{page_range.start}-{page_range.stop}"
+    return DATA_DIR / stem
+
+
+def snapshot_exists(base: Path) -> bool:
+    """Return True if the v3 snapshot files exist (or legacy .snap.gz)."""
+    return (Path(str(base) + ".trifecta").exists()
+            or Path(str(base) + ".snap.gz").exists())
 
 
 def ollama_model() -> str:
