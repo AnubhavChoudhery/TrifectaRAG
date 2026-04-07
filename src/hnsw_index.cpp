@@ -46,7 +46,7 @@ float HNSWIndex::get_distance(const std::vector<float>& vec, uint32_t a) const {
 
 std::vector<uint32_t> HNSWIndex::select_neighbors(
     const std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, CompareByDistance>& candidates,
-    size_t M) {
+    size_t M) const {
     auto cands = candidates;
     std::vector<std::pair<float, uint32_t>> cands_vec;
     while (!cands.empty()) {
@@ -65,7 +65,7 @@ std::vector<uint32_t> HNSWIndex::select_neighbors(
 }
 
 std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, HNSWIndex::CompareByDistance> 
-HNSWIndex::search_layer(uint32_t ep, const std::vector<float>& query, size_t ef, int level) {
+HNSWIndex::search_layer(uint32_t ep, const std::vector<float>& query, size_t ef, int level) const {
     std::unordered_set<uint32_t> visited;
     visited.insert(ep);
     
@@ -165,7 +165,7 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
     }
 }
 
-std::vector<std::pair<uint32_t, float>> HNSWIndex::search(const std::vector<float>& query, size_t k, size_t ef) {
+std::vector<std::pair<uint32_t, float>> HNSWIndex::search(const std::vector<float>& query, size_t k, size_t ef) const {
     check_dim(query);
     if (vectors_.empty()) {
         return {};

@@ -15,7 +15,7 @@ public:
     HNSWIndex(size_t dim, size_t M = 16, size_t ef_construction = 200, size_t max_elements = 10000);
 
     void add_point(uint32_t global_id, const std::vector<float>& vec);
-    std::vector<std::pair<uint32_t, float>> search(const std::vector<float>& query, size_t k, size_t ef);
+    std::vector<std::pair<uint32_t, float>> search(const std::vector<float>& query, size_t k, size_t ef) const;
 
 private:
     struct CompareByDistance {
@@ -54,11 +54,11 @@ private:
     float get_distance(const std::vector<float>& vec, uint32_t a) const;
 
     std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, CompareByDistance> 
-    search_layer(uint32_t ep, const std::vector<float>& query, size_t ef, int level);
+    search_layer(uint32_t ep, const std::vector<float>& query, size_t ef, int level) const;
 
     std::vector<uint32_t> select_neighbors(
         const std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, CompareByDistance>& candidates,
-        size_t M);
+        size_t M) const;
 };
 
 } // namespace trifecta

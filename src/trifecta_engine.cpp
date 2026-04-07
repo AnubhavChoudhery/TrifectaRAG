@@ -92,7 +92,7 @@ TrifectaEngine::query(const std::vector<float>& query_vec,
     // ── 1. Vector search ───────────────────────────────────────────────────
     std::vector<std::pair<uint32_t, float>> hnsw_results;
     if (!query_vec.empty()) {
-        hnsw_results = const_cast<HNSWIndex&>(hnsw_).search(query_vec, hnsw_k, search_ef);
+        hnsw_results = hnsw_.search(query_vec, hnsw_k, search_ef);
     }
 
     // ── 2. BM25 keyword search ─────────────────────────────────────────────
@@ -114,9 +114,6 @@ TrifectaEngine::query(const std::vector<float>& query_vec,
 
     // ── 4. KG 1-hop context expansion ─────────────────────────────────────
     const std::vector<uint32_t> kg_neighbors = kg_.bfs_one_hop_neighbors(seed_ids);
-
-    // Mark which IDs are already seeds so we can distinguish pure-context docs.
-    const std::unordered_set<uint32_t> seed_set(seed_ids.begin(), seed_ids.end());
 
     // ── 5. Reciprocal Rank Fusion ──────────────────────────────────────────
     //   score(d) = Σ_i  1 / (kRrfK + rank_i(d))    for each list i
