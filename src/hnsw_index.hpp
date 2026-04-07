@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <queue>
 #include <random>
 #include <utility>
@@ -16,6 +17,9 @@ public:
 
     void add_point(uint32_t global_id, const std::vector<float>& vec);
     std::vector<std::pair<uint32_t, float>> search(const std::vector<float>& query, size_t k, size_t ef) const;
+
+    void save(std::ostream& os) const;
+    void load(std::istream& is);
 
 private:
     struct CompareByDistance {

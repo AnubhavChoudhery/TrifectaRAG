@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -59,6 +60,9 @@ public:
         k1_ = k1;
         b_  = b;
     }
+
+    void save(std::ostream& os) const;
+    void load(std::istream& is);
 
 private:
     void rebuild_inverted_for_term(const std::string& term);

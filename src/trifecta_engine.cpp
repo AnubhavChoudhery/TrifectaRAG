@@ -5,8 +5,10 @@
  */
 
 #include "trifecta_engine.hpp"
+#include "serialize_utils.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -157,6 +159,53 @@ TrifectaEngine::query(const std::vector<float>& query_vec,
         result.resize(top_k);
     }
     return result;
+}
+
+// =============================================================================
+// Binary persistence
+// =============================================================================
+
+static constexpr char     kMagic[8] = {'T','R','I','F','E','C','T','A'};
+static constexpr uint32_t kVersion  = 1;
+
+void TrifectaEngine::save(std::ostream& os) const {
+    os.write(kMagic, 8);
+    io::write_u32(os, kVersion);
+    io::write_u64(os, dim_);
+    registry_.save(os);
+    hnsw_.save(os);
+    lexical_.save(os);
+    kg_.save(os);
+}
+
+void TrifectaEngine::load(std::istream& is) {
+    char magic[8];
+    is.read(magic, 8);
+    if (!std::equal(magic, magic + 8, kMagic)) {
+        throw std::runtime_error("TrifectaEngine::load — invalid file (bad magic header)");
+    }
+    uint32_t ver = io::read_u32(is);
+    if (ver != kVersion) {
+        throw std::runtime_error(
+            "TrifectaEngine::load — unsupported file version " + std::to_string(ver));
+    }
+    dim_ = static_cast<std::size_t>(io::read_u64(is));
+    registry_.load(is);
+    hnsw_.load(is);
+    lexical_.load(is);
+    kg_.load(is);
+}
+
+void TrifectaEngine::save_to_file(const std::string& path) const {
+    std::ofstream ofs(path, std::ios::binary);
+    if (!ofs) throw std::runtime_error("Cannot open for writing: " + path);
+    save(ofs);
+}
+
+void TrifectaEngine::load_from_file(const std::string& path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) throw std::runtime_error("Cannot open for reading: " + path);
+    load(ifs);
 }
 
 }  // namespace trifecta

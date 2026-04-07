@@ -5,6 +5,7 @@
  */
 
 #include "knowledge_graph.hpp"
+#include "serialize_utils.hpp"
 
 #include <algorithm>
 #include <queue>
@@ -42,6 +43,38 @@ std::vector<uint32_t> KnowledgeGraph::bfs_one_hop_neighbors(
 
     std::sort(out.begin(), out.end());
     return out;
+}
+
+// =============================================================================
+// Binary persistence
+// =============================================================================
+
+void KnowledgeGraph::save(std::ostream& os) const {
+    io::write_u64(os, adj_.size());
+    for (const auto& entry : adj_) {
+        io::write_u32(os, entry.first);
+        io::write_u64(os, entry.second.size());
+        for (const Edge& e : entry.second) {
+            io::write_u32(os, e.target_id);
+            io::write_u8(os, static_cast<uint8_t>(e.type));
+        }
+    }
+}
+
+void KnowledgeGraph::load(std::istream& is) {
+    adj_.clear();
+    const uint64_t n = io::read_u64(is);
+    for (uint64_t i = 0; i < n; ++i) {
+        uint32_t src = io::read_u32(is);
+        const uint64_t n_edges = io::read_u64(is);
+        auto& edges = adj_[src];
+        edges.reserve(static_cast<std::size_t>(n_edges));
+        for (uint64_t j = 0; j < n_edges; ++j) {
+            uint32_t tgt = io::read_u32(is);
+            auto et = static_cast<EdgeType>(io::read_u8(is));
+            edges.push_back(Edge{tgt, et});
+        }
+    }
 }
 
 }  // namespace trifecta

@@ -34,6 +34,7 @@
 #include <cassert>        // assert() for invariant checks
 #include <cmath>          // std::sqrt, std::fabs
 #include <cstdint>        // uint8_t, uint32_t — fixed-width types
+#include <iosfwd>         // forward decl for save/load
 #include <limits>         // std::numeric_limits
 #include <optional>       // std::optional for safe node lookup
 #include <stdexcept>      // std::out_of_range, std::runtime_error
@@ -261,15 +262,12 @@ public:
         return nodes_;
     }
 
+    // ─── Binary Persistence ─────────────────────────────────────────────────
+
+    void save(std::ostream& os) const;
+    void load(std::istream& is);
+
 private:
-    /**
-     * nodes_
-     * ------
-     * The contiguous backing store. Index == global_id, always.
-     * Declared at the end of the class to avoid any accidental padding impact
-     * on the class object itself (though there is none for a single-member
-     * class — belt-and-suspenders habit).
-     */
     std::vector<NodeData> nodes_;
 };
 

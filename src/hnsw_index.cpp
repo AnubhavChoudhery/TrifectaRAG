@@ -1,4 +1,5 @@
 #include "hnsw_index.hpp"
+#include "serialize_utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -188,6 +189,89 @@ std::vector<std::pair<uint32_t, float>> HNSWIndex::search(const std::vector<floa
     std::reverse(res.begin(), res.end());
     if (res.size() > k) res.resize(k);
     return res;
+}
+
+// =============================================================================
+// Binary persistence
+// =============================================================================
+
+void HNSWIndex::save(std::ostream& os) const {
+    io::write_u64(os, dim_);
+    io::write_u64(os, M_);
+    io::write_u64(os, M_max_);
+    io::write_u64(os, M_max0_);
+    io::write_u64(os, ef_construction_);
+    io::write_f64(os, mult_);
+    io::write_i32(os, max_level_);
+    io::write_u32(os, enter_point_);
+
+    const uint64_t n_vecs = vectors_.size();
+    io::write_u64(os, n_vecs);
+    for (const auto& v : vectors_) {
+        os.write(reinterpret_cast<const char*>(v.data()),
+                 static_cast<std::streamsize>(dim_ * sizeof(float)));
+    }
+
+    io::write_u64(os, id_map_.size());
+    if (!id_map_.empty()) {
+        os.write(reinterpret_cast<const char*>(id_map_.data()),
+                 static_cast<std::streamsize>(id_map_.size() * sizeof(uint32_t)));
+    }
+
+    io::write_u64(os, links_.size());
+    for (const auto& level : links_) {
+        io::write_u64(os, level.size());
+        for (const auto& node_links : level) {
+            io::write_u64(os, node_links.size());
+            if (!node_links.empty()) {
+                os.write(reinterpret_cast<const char*>(node_links.data()),
+                         static_cast<std::streamsize>(node_links.size() * sizeof(uint32_t)));
+            }
+        }
+    }
+}
+
+void HNSWIndex::load(std::istream& is) {
+    dim_              = static_cast<size_t>(io::read_u64(is));
+    M_                = static_cast<size_t>(io::read_u64(is));
+    M_max_            = static_cast<size_t>(io::read_u64(is));
+    M_max0_           = static_cast<size_t>(io::read_u64(is));
+    ef_construction_  = static_cast<size_t>(io::read_u64(is));
+    mult_             = io::read_f64(is);
+    max_level_        = io::read_i32(is);
+    enter_point_      = io::read_u32(is);
+
+    const uint64_t n_vecs = io::read_u64(is);
+    vectors_.clear();
+    vectors_.resize(static_cast<size_t>(n_vecs));
+    for (auto& v : vectors_) {
+        v.resize(dim_);
+        is.read(reinterpret_cast<char*>(v.data()),
+                static_cast<std::streamsize>(dim_ * sizeof(float)));
+    }
+
+    const uint64_t n_ids = io::read_u64(is);
+    id_map_.resize(static_cast<size_t>(n_ids));
+    if (n_ids > 0) {
+        is.read(reinterpret_cast<char*>(id_map_.data()),
+                static_cast<std::streamsize>(n_ids * sizeof(uint32_t)));
+    }
+
+    const uint64_t n_levels = io::read_u64(is);
+    links_.clear();
+    links_.resize(static_cast<size_t>(n_levels));
+    for (auto& level : links_) {
+        const uint64_t n_nodes = io::read_u64(is);
+        level.resize(static_cast<size_t>(n_nodes));
+        for (auto& node_links : level) {
+            const uint64_t n_nbrs = io::read_u64(is);
+            node_links.resize(static_cast<size_t>(n_nbrs));
+            if (n_nbrs > 0) {
+                is.read(reinterpret_cast<char*>(node_links.data()),
+                        static_cast<std::streamsize>(n_nbrs * sizeof(uint32_t)));
+            }
+        }
+    }
 }
 
 } // namespace trifecta

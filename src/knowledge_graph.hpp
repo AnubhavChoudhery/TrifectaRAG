@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <unordered_map>
 #include <vector>
 
@@ -43,6 +44,9 @@ public:
      */
     [[nodiscard]] std::vector<uint32_t> bfs_one_hop_neighbors(
         const std::vector<uint32_t>& seed_ids) const;
+
+    void save(std::ostream& os) const;
+    void load(std::istream& is);
 
 private:
     std::unordered_map<uint32_t, std::vector<Edge>> adj_;

@@ -30,6 +30,7 @@
  */
 
 #include "trifecta_core.hpp"
+#include "serialize_utils.hpp"
 
 #include <cmath>       // std::sqrt, std::fabs
 #include <stdexcept>   // std::invalid_argument
@@ -279,4 +280,30 @@ float l2_distance_sq(const std::vector<float>& a,
 }
 
 } // namespace math
+
+// =============================================================================
+// GlobalRegistry — binary persistence
+// =============================================================================
+
+void GlobalRegistry::save(std::ostream& os) const {
+    io::write_u64(os, nodes_.size());
+    for (const auto& n : nodes_) {
+        io::write_u32(os, n.global_id);
+        io::write_u8(os, static_cast<uint8_t>(n.type));
+        io::write_str(os, n.metadata_payload);
+    }
+}
+
+void GlobalRegistry::load(std::istream& is) {
+    nodes_.clear();
+    const uint64_t count = io::read_u64(is);
+    nodes_.reserve(static_cast<std::size_t>(count));
+    for (uint64_t i = 0; i < count; ++i) {
+        uint32_t gid = io::read_u32(is);
+        auto mod = static_cast<Modality>(io::read_u8(is));
+        std::string meta = io::read_str(is);
+        nodes_.emplace_back(gid, mod, std::move(meta));
+    }
+}
+
 } // namespace trifecta

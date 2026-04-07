@@ -30,6 +30,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 #include <string>
 #include <utility>
 #include <vector>
@@ -127,6 +128,17 @@ public:
           const std::string&        query_text,
           std::size_t               top_k     = kDefaultTopK,
           std::size_t               search_ef = kDefaultSearchEf) const;
+
+    // ── Binary Persistence ────────────────────────────────────────────────────
+
+    /** Serialize the full engine state (registry, HNSW graph, BM25, KG) to a binary stream. */
+    void save(std::ostream& os) const;
+    /** Replace engine state from a binary stream written by save(). */
+    void load(std::istream& is);
+
+    /** Convenience: serialize to / deserialize from a file path. */
+    void save_to_file(const std::string& path) const;
+    void load_from_file(const std::string& path);
 
     // ── Accessors ────────────────────────────────────────────────────────────
 

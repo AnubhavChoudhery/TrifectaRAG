@@ -5,6 +5,7 @@
  */
 
 #include "lexical_index.hpp"
+#include "serialize_utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -198,6 +199,66 @@ std::vector<std::pair<uint32_t, float>> LexicalIndex::score_query(const std::str
         return a.first < b.first;
     });
     return out;
+}
+
+// =============================================================================
+// Binary persistence
+// =============================================================================
+
+void LexicalIndex::save(std::ostream& os) const {
+    io::write_f32(os, k1_);
+    io::write_f32(os, b_);
+    io::write_u64(os, document_count_);
+    io::write_u64(os, sum_doc_token_len_);
+
+    io::write_u64(os, doc_lengths_.size());
+    for (const auto& p : doc_lengths_) {
+        io::write_u32(os, p.first);
+        io::write_u32(os, p.second);
+    }
+
+    io::write_u64(os, term_doc_tf_.size());
+    for (const auto& term_entry : term_doc_tf_) {
+        io::write_str(os, term_entry.first);
+        io::write_u64(os, term_entry.second.size());
+        for (const auto& doc_tf : term_entry.second) {
+            io::write_u32(os, doc_tf.first);
+            io::write_u32(os, doc_tf.second);
+        }
+    }
+}
+
+void LexicalIndex::load(std::istream& is) {
+    inverted_index_.clear();
+    term_doc_tf_.clear();
+    doc_term_tf_.clear();
+    doc_lengths_.clear();
+
+    k1_                = io::read_f32(is);
+    b_                 = io::read_f32(is);
+    document_count_    = static_cast<std::size_t>(io::read_u64(is));
+    sum_doc_token_len_ = io::read_u64(is);
+
+    const uint64_t n_docs = io::read_u64(is);
+    for (uint64_t i = 0; i < n_docs; ++i) {
+        uint32_t gid = io::read_u32(is);
+        uint32_t len = io::read_u32(is);
+        doc_lengths_[gid] = len;
+    }
+
+    const uint64_t n_terms = io::read_u64(is);
+    for (uint64_t i = 0; i < n_terms; ++i) {
+        std::string term = io::read_str(is);
+        const uint64_t n_entries = io::read_u64(is);
+        auto& doc_map = term_doc_tf_[term];
+        for (uint64_t j = 0; j < n_entries; ++j) {
+            uint32_t gid = io::read_u32(is);
+            uint32_t tf  = io::read_u32(is);
+            doc_map[gid] = tf;
+            doc_term_tf_[gid][term] = tf;
+        }
+        rebuild_inverted_for_term(term);
+    }
 }
 
 }  // namespace trifecta
