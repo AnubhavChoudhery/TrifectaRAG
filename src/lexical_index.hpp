@@ -51,10 +51,12 @@ public:
     }
 
     /**
-     * BM25 scores for all documents that match at least one query token.
-     * Results sorted by descending score, then ascending global_id.
+     * BM25 scores for documents matching at least one query token.
+     * Results sorted descending by score, then ascending by global_id.
+     * @param max_results  0 = return all, >0 = return at most this many.
      */
-    [[nodiscard]] std::vector<std::pair<uint32_t, float>> score_query(const std::string& query) const;
+    [[nodiscard]] std::vector<std::pair<uint32_t, float>>
+    score_query(const std::string& query, std::size_t max_results = 0) const;
 
     void set_bm25_params(float k1, float b) noexcept {
         k1_ = k1;

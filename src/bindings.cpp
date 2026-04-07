@@ -184,6 +184,32 @@ Raises:
              "global_id"_a,
              py::return_value_policy::reference_internal)
 
+        // ── binary persistence ───────────────────────────────────────────
+        .def("save_to_file",
+             &TrifectaEngine::save_to_file,
+             R"doc(
+Serialize the full engine state (HNSW graph, BM25 index, KG, registry)
+to a binary file.  The resulting file can be loaded back with
+``load_from_file`` without any re-indexing.
+
+Args:
+    path (str): Destination file path.
+             )doc",
+             "path"_a)
+
+        .def("load_from_file",
+             &TrifectaEngine::load_from_file,
+             R"doc(
+Replace the current engine state from a binary file written by
+``save_to_file``.  This restores the full HNSW graph structure,
+BM25 inverted index, knowledge graph, and global registry in a
+single read — much faster than re-ingesting.
+
+Args:
+    path (str): Source file path.
+             )doc",
+             "path"_a)
+
         // ── read-only properties ─────────────────────────────────────────
         .def_property_readonly("size",
             &TrifectaEngine::size,

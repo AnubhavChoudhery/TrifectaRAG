@@ -100,10 +100,7 @@ TrifectaEngine::query(const std::vector<float>& query_vec,
     // ── 2. BM25 keyword search ─────────────────────────────────────────────
     std::vector<std::pair<uint32_t, float>> bm25_results;
     if (!query_text.empty()) {
-        bm25_results = lexical_.score_query(query_text);
-        if (bm25_results.size() > top_k * 2) {
-            bm25_results.resize(top_k * 2);
-        }
+        bm25_results = lexical_.score_query(query_text, top_k * 2);
     }
 
     // ── 3. Build seed set for KG expansion ────────────────────────────────

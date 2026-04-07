@@ -144,7 +144,8 @@ float LexicalIndex::idf(std::size_t num_docs, std::uint32_t df) noexcept {
     return std::log(1.0f + (N - nq + 0.5f) / (nq + 0.5f));
 }
 
-std::vector<std::pair<uint32_t, float>> LexicalIndex::score_query(const std::string& query) const {
+std::vector<std::pair<uint32_t, float>>
+LexicalIndex::score_query(const std::string& query, std::size_t max_results) const {
     const std::vector<std::string> q_tokens = tokenize(query);
     if (q_tokens.empty() || document_count_ == 0) {
         return {};
@@ -191,13 +192,20 @@ std::vector<std::pair<uint32_t, float>> LexicalIndex::score_query(const std::str
     for (auto& p : acc) {
         out.push_back(std::move(p));
     }
-    std::sort(out.begin(), out.end(), [](const std::pair<uint32_t, float>& a,
-                                         const std::pair<uint32_t, float>& b) {
-        if (a.second != b.second) {
-            return a.second > b.second;
-        }
+
+    auto cmp = [](const std::pair<uint32_t, float>& a,
+                  const std::pair<uint32_t, float>& b) {
+        if (a.second != b.second) return a.second > b.second;
         return a.first < b.first;
-    });
+    };
+
+    if (max_results > 0 && out.size() > max_results) {
+        std::partial_sort(out.begin(), out.begin() + static_cast<long>(max_results),
+                          out.end(), cmp);
+        out.resize(max_results);
+    } else {
+        std::sort(out.begin(), out.end(), cmp);
+    }
     return out;
 }
 
