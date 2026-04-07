@@ -109,6 +109,37 @@ class PDFIngestor:
         self._overlap = overlap
         self._min_img_px = min_img_px
 
+    # ── Multi-PDF convenience ─────────────────────────────────────────────
+
+    def ingest_pdfs(
+        self,
+        pdf_paths: List[str],
+        output_dir: str = "examples/data",
+        page_ranges: Optional[Dict[str, range]] = None,
+    ) -> Dict[str, int]:
+        """
+        Ingest multiple PDFs into the same engine.
+
+        Args:
+            pdf_paths:   List of paths to PDF files.
+            output_dir:  Directory where extracted images are saved.
+            page_ranges: Optional dict mapping pdf filename stem to a page range.
+                         PDFs not in the dict use the full page range.
+
+        Returns:
+            Aggregated stats dict: {pages, text_chunks, images, kg_edges}.
+        """
+        total: Dict[str, int] = {"pages": 0, "text_chunks": 0, "images": 0, "kg_edges": 0}
+        page_ranges = page_ranges or {}
+        for p in pdf_paths:
+            stem = Path(p).stem
+            pr = page_ranges.get(stem)
+            logger.info("Ingesting %s (range=%s) ...", stem, pr)
+            stats = self.ingest_pdf(p, output_dir=output_dir, page_range=pr)
+            for k in total:
+                total[k] += stats[k]
+        return total
+
     # ── Vector figure helper ─────────────────────────────────────────────────
 
     def _render_vector_figure(

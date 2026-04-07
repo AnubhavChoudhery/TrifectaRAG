@@ -32,7 +32,7 @@ _FRONT_MATTER: dict[str, int] = {
 
 
 def resolve_pdf_path() -> Path:
-    """Return the PDF to use for ingestion / query examples."""
+    """Return the primary PDF to use for ingestion / query examples."""
     env = os.environ.get("TRIFECTA_TEXTBOOK_PDF", "").strip()
     if env:
         p = Path(env).expanduser().resolve()
@@ -52,13 +52,19 @@ def resolve_pdf_path() -> Path:
             f"No PDF found in {DATA_DIR}. Add {DEFAULT_PDF_NAME} or set "
             "TRIFECTA_TEXTBOOK_PDF to a .pdf path."
         )
-    if len(pdfs) > 1:
-        names = ", ".join(p.name for p in pdfs)
-        raise FileNotFoundError(
-            f"Multiple PDFs in {DATA_DIR}: {names}. "
-            f"Rename one to {DEFAULT_PDF_NAME} or set TRIFECTA_TEXTBOOK_PDF."
-        )
     return pdfs[0].resolve()
+
+
+def resolve_all_pdfs() -> list[Path]:
+    """Return all PDFs in the data directory, sorted alphabetically.
+
+    Falls back to the single PDF from resolve_pdf_path() if the data dir
+    is empty or missing.
+    """
+    pdfs = sorted(DATA_DIR.glob("*.pdf"))
+    if not pdfs:
+        return [resolve_pdf_path()]
+    return [p.resolve() for p in pdfs]
 
 
 def page_range_for_document(num_pages: int, pdf_path: Optional[Path] = None) -> range:
