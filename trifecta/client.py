@@ -16,9 +16,11 @@ cosine similarity across modalities and mathematically sound late fusion.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 import pickle
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -114,6 +116,13 @@ class TrifectaClient:
         # running any PDF extraction or ML inference.
         self._records: List[Dict[str, Any]] = []
         self._edge_log: List[Tuple[int, int, str]] = []
+
+        # LRU embedding cache — avoids redundant ML inference for repeated
+        # queries.  Text keys are the string itself; image keys are a sha256
+        # digest of the raw pixel bytes.
+        self._embed_cache_max = 128
+        self._text_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._image_cache: OrderedDict[str, np.ndarray] = OrderedDict()
 
         # Page index: (source, page_num) -> list of global_ids on that page.
         # Enables page-level retrieval and answers the "page-index equivalency"
@@ -508,19 +517,36 @@ class TrifectaClient:
     # ── Private ──────────────────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> np.ndarray:
-        """Encode text via sentence-transformers -> float32 numpy vector."""
+        """Encode text via sentence-transformers -> float32 numpy vector (LRU cached)."""
+        cached = self._text_cache.get(text)
+        if cached is not None:
+            self._text_cache.move_to_end(text)
+            return cached
         vec = self._text_model.encode(
             text, convert_to_numpy=True, show_progress_bar=False
         )
-        return np.asarray(vec, dtype=np.float32).flatten()
+        result = np.asarray(vec, dtype=np.float32).flatten()
+        self._text_cache[text] = result
+        if len(self._text_cache) > self._embed_cache_max:
+            self._text_cache.popitem(last=False)
+        return result
 
     def _embed_image(self, image: Image.Image) -> np.ndarray:
-        """Encode a PIL image via CLIP -> float32 numpy vector."""
+        """Encode a PIL image via CLIP -> float32 numpy vector (LRU cached)."""
+        img_hash = hashlib.sha256(image.tobytes()).hexdigest()
+        cached = self._image_cache.get(img_hash)
+        if cached is not None:
+            self._image_cache.move_to_end(img_hash)
+            return cached
         inputs = self._clip_processor(images=image, return_tensors="pt")
         pixel_values = inputs["pixel_values"].to(self._device)
         with torch.no_grad():
             features = self._clip_model.get_image_features(pixel_values=pixel_values)
-        return features.cpu().numpy().astype(np.float32).flatten()
+        result = features.cpu().numpy().astype(np.float32).flatten()
+        self._image_cache[img_hash] = result
+        if len(self._image_cache) > self._embed_cache_max:
+            self._image_cache.popitem(last=False)
+        return result
 
     @staticmethod
     def _load_image(image: ImageInput) -> Image.Image:
