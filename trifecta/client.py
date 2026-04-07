@@ -269,32 +269,45 @@ class TrifectaClient:
 
     def save_snapshot(self, path: str) -> None:
         """
-        Serialise the full engine state (records + KG edges) to a gzip-
-        compressed pickle file.  A subsequent call to ``from_snapshot`` can
-        restore the engine in seconds without re-reading the PDF or re-running
-        any ML inference.
+        Persist the full engine state to disk.
+
+        This writes **two files** next to each other:
+          1. A binary engine file (``<stem>.trifecta``) containing the full
+             HNSW graph, BM25 inverted index, KG, and registry — no rebuild
+             needed on load.
+          2. A gzip-compressed pickle sidecar (``<stem>.meta.gz``) containing
+             the Python-level records, edge log, and page index.
+
+        A subsequent ``from_snapshot`` restores the engine via a direct
+        binary load — orders of magnitude faster than re-inserting all
+        embeddings.
 
         Args:
-            path: Destination path.  A ``.snap.gz`` extension is appended if
-                  the path does not already end with ``.gz``.
+            path: Base destination path (extensions are added automatically).
         """
         p = Path(path)
-        if not str(p).endswith(".gz"):
-            p = Path(str(p) + ".snap.gz") if not str(p).endswith(".snap.gz") else p
-        data = {
-            "version": 2,
+        stem = str(p).removesuffix(".snap.gz").removesuffix(".gz")
+        engine_path = Path(stem + ".trifecta")
+        meta_path = Path(stem + ".meta.gz")
+
+        self._engine.save_to_file(str(engine_path))
+
+        sidecar = {
+            "version": 3,
             "dim": self._dim,
             "records": self._records,
             "edges": self._edge_log,
-            "page_index": {f"{s}\x00{p}": gids for (s, p), gids in self._page_index.items()},
-            "gid_to_page": {gid: [s, p] for gid, (s, p) in self._gid_to_page.items()},
+            "page_index": {f"{s}\x00{pg}": gids for (s, pg), gids in self._page_index.items()},
+            "gid_to_page": {gid: [s, pg] for gid, (s, pg) in self._gid_to_page.items()},
         }
-        with gzip.open(str(p), "wb", compresslevel=5) as f:
-            pickle.dump(data, f, protocol=4)
-        size_kb = p.stat().st_size / 1024
+        with gzip.open(str(meta_path), "wb", compresslevel=5) as f:
+            pickle.dump(sidecar, f, protocol=4)
+
+        eng_kb = engine_path.stat().st_size / 1024
+        meta_kb = meta_path.stat().st_size / 1024
         logger.info(
-            "Snapshot saved: %d records, %d edges -> %s (%.1f KB)",
-            len(self._records), len(self._edge_log), p, size_kb,
+            "Snapshot saved: %d nodes -> %s (%.0f KB engine + %.0f KB meta)",
+            self.size, engine_path.name, eng_kb, meta_kb,
         )
 
     @classmethod
@@ -309,54 +322,123 @@ class TrifectaClient:
         max_elements: int = 1_000_000,
     ) -> "TrifectaClient":
         """
-        Restore a ``TrifectaClient`` from a snapshot file.
+        Restore a ``TrifectaClient`` from a snapshot.
 
-        The ML models are loaded normally (needed for future queries), but
-        the stored text/image embeddings are injected directly into the C++
-        engine — no PDF re-reading, no CLIP/ST inference on the corpus.
+        Supports **three** snapshot formats for backward compatibility:
+          - v3 (current): binary engine file + sidecar metadata.
+          - v2: single gzip pickle with page index.
+          - v1: single gzip pickle without page index.
 
         Args:
-            snapshot_path: Path to a ``.snap.gz`` file created by
-                           :meth:`save_snapshot`.
-            text_model:    sentence-transformers model (for query embedding).
-            clip_model:    HuggingFace CLIP model (for query image embedding).
-            device:        Torch device (default: auto).
-            hnsw_M / ef_construction / max_elements: HNSW parameters.
-
-        Returns:
-            A fully-populated ``TrifectaClient``.
+            snapshot_path: Path to a ``.trifecta``, ``.meta.gz``, or legacy
+                           ``.snap.gz`` file.
         """
         sp = Path(snapshot_path)
-        if not sp.exists():
-            raise FileNotFoundError(f"Snapshot not found: {sp}")
 
-        with gzip.open(str(sp), "rb") as f:
+        # Detect v3 format: look for the .trifecta engine file.
+        stem = str(sp).removesuffix(".snap.gz").removesuffix(".gz") \
+                       .removesuffix(".meta").removesuffix(".trifecta")
+        engine_path = Path(stem + ".trifecta")
+        meta_path = Path(stem + ".meta.gz")
+
+        if engine_path.exists() and meta_path.exists():
+            return cls._load_v3(engine_path, meta_path,
+                                text_model, clip_model, device,
+                                hnsw_M, ef_construction, max_elements)
+
+        # Legacy fallback: single gzip pickle (.snap.gz).
+        legacy = sp if sp.exists() else None
+        if legacy is None:
+            legacy_gz = Path(stem + ".snap.gz")
+            if legacy_gz.exists():
+                legacy = legacy_gz
+        if legacy is None:
+            raise FileNotFoundError(
+                f"Snapshot not found: tried {engine_path}, {meta_path}, {sp}")
+
+        return cls._load_legacy(legacy, text_model, clip_model, device,
+                                hnsw_M, ef_construction, max_elements)
+
+    @classmethod
+    def _load_v3(
+        cls,
+        engine_path: Path,
+        meta_path: Path,
+        text_model: str,
+        clip_model: str,
+        device: Optional[str],
+        hnsw_M: int,
+        ef_construction: int,
+        max_elements: int,
+    ) -> "TrifectaClient":
+        """Load v3 snapshot: binary engine + sidecar metadata."""
+        with gzip.open(str(meta_path), "rb") as f:
+            sidecar = pickle.load(f)
+
+        snap_dim: int = sidecar["dim"]
+        records: List[Dict[str, Any]] = sidecar["records"]
+        edges: List[Tuple[int, int, str]] = sidecar["edges"]
+
+        logger.info("Loading v3 snapshot: %s + %s (%d records)",
+                     engine_path.name, meta_path.name, len(records))
+
+        client = cls(text_model=text_model, clip_model=clip_model,
+                      device=device, hnsw_M=hnsw_M,
+                      ef_construction=ef_construction,
+                      max_elements=max_elements)
+
+        if client._dim != snap_dim:
+            raise ValueError(
+                f"Model dim ({client._dim}) != snapshot dim ({snap_dim})")
+
+        # Replace the C++ engine state directly from the binary file.
+        client._engine.load_from_file(str(engine_path))
+
+        client._records = records
+        client._edge_log = edges
+
+        raw_pi = sidecar.get("page_index", {})
+        raw_g2p = sidecar.get("gid_to_page", {})
+        for key_str, gids in raw_pi.items():
+            s, p_str = key_str.split("\x00", 1)
+            client._page_index[(s, int(p_str))] = gids
+        for gid_str, sp_pair in raw_g2p.items():
+            client._gid_to_page[int(gid_str)] = (sp_pair[0], int(sp_pair[1]))
+
+        logger.info("Snapshot loaded: engine has %d nodes, %d pages",
+                     client.size, client.page_count)
+        return client
+
+    @classmethod
+    def _load_legacy(
+        cls,
+        legacy_path: Path,
+        text_model: str,
+        clip_model: str,
+        device: Optional[str],
+        hnsw_M: int,
+        ef_construction: int,
+        max_elements: int,
+    ) -> "TrifectaClient":
+        """Load v1/v2 snapshot: single gzip pickle, re-inserts into engine."""
+        with gzip.open(str(legacy_path), "rb") as f:
             data = pickle.load(f)
 
         records: List[Dict[str, Any]] = data["records"]
         edges: List[Tuple[int, int, str]] = data["edges"]
         snap_dim: int = data["dim"]
 
-        logger.info(
-            "Loading snapshot %s: %d records, %d edges",
-            sp.name, len(records), len(edges),
-        )
+        logger.info("Loading legacy snapshot %s: %d records, %d edges",
+                     legacy_path.name, len(records), len(edges))
 
-        # Create the client normally (loads ML models, creates empty engine).
-        client = cls(
-            text_model=text_model,
-            clip_model=clip_model,
-            device=device,
-            hnsw_M=hnsw_M,
-            ef_construction=ef_construction,
-            max_elements=max_elements,
-        )
+        client = cls(text_model=text_model, clip_model=clip_model,
+                      device=device, hnsw_M=hnsw_M,
+                      ef_construction=ef_construction,
+                      max_elements=max_elements)
 
         if client._dim != snap_dim:
             raise ValueError(
-                f"Model embedding dim ({client._dim}) does not match snapshot "
-                f"dim ({snap_dim}).  Use the same model that created the snapshot."
-            )
+                f"Model dim ({client._dim}) != snapshot dim ({snap_dim})")
 
         _mod_map = {"TEXT": tr.Modality.TEXT, "IMAGE": tr.Modality.IMAGE}
         _edge_map = {
@@ -378,7 +460,6 @@ class TrifectaClient:
             client._engine.add_edge(src, tgt, _edge_map[etype_str])
             client._edge_log.append((src, tgt, etype_str))
 
-        # Restore page index (v2+); older snapshots rebuild from metadata.
         raw_pi = data.get("page_index")
         raw_g2p = data.get("gid_to_page")
         if raw_pi and raw_g2p:
@@ -395,7 +476,7 @@ class TrifectaClient:
                     continue
                 client._register_page(rec["gid"], meta)
 
-        logger.info("Snapshot loaded: engine has %d nodes, %d page entries",
+        logger.info("Legacy snapshot loaded: engine has %d nodes, %d pages",
                      client.size, client.page_count)
         return client
 
