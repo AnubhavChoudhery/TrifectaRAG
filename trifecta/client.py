@@ -115,6 +115,47 @@ class TrifectaClient:
         self._records: List[Dict[str, Any]] = []
         self._edge_log: List[Tuple[int, int, str]] = []
 
+        # Page index: (source, page_num) -> list of global_ids on that page.
+        # Enables page-level retrieval and answers the "page-index equivalency"
+        # question — every chunk is traceable back to its source page.
+        self._page_index: Dict[Tuple[str, int], List[int]] = {}
+        # Reverse map: global_id -> (source, page)
+        self._gid_to_page: Dict[int, Tuple[str, int]] = {}
+
+    # ── Page index helpers ─────────────────────────────────────────────────
+
+    def _register_page(self, gid: int, metadata: Optional[Dict[str, Any]]) -> None:
+        """If metadata contains source+page, register in the page index."""
+        if metadata is None:
+            return
+        source = metadata.get("source")
+        page = metadata.get("page")
+        if source is not None and page is not None:
+            key = (str(source), int(page))
+            self._page_index.setdefault(key, []).append(gid)
+            self._gid_to_page[gid] = key
+
+    def get_page_chunks(self, source: str, page: int) -> List[int]:
+        """Return all global_ids ingested from the given source and page number."""
+        return list(self._page_index.get((source, page), []))
+
+    def get_chunk_page(self, global_id: int) -> Optional[Tuple[str, int]]:
+        """Return (source, page) for a global_id, or None if not page-indexed."""
+        return self._gid_to_page.get(global_id)
+
+    def list_sources(self) -> List[str]:
+        """Return sorted list of unique source names in the page index."""
+        return sorted({k[0] for k in self._page_index})
+
+    def list_pages(self, source: str) -> List[int]:
+        """Return sorted list of page numbers indexed for a given source."""
+        return sorted({k[1] for k in self._page_index if k[0] == source})
+
+    @property
+    def page_count(self) -> int:
+        """Total number of distinct (source, page) pairs indexed."""
+        return len(self._page_index)
+
     # ── Ingestion ────────────────────────────────────────────────────────────
 
     def add_document(
@@ -154,6 +195,7 @@ class TrifectaClient:
             {"gid": gid, "text": text, "embedding": emb_list,
              "metadata": meta_json, "modality": "TEXT"}
         )
+        self._register_page(gid, meta)
         logger.debug("Ingested document gid=%d len(text)=%d", gid, len(text))
         return gid
 
@@ -195,6 +237,7 @@ class TrifectaClient:
             {"gid": gid, "text": caption, "embedding": emb_list,
              "metadata": meta_json, "modality": "IMAGE"}
         )
+        self._register_page(gid, meta)
         logger.debug("Ingested image gid=%d", gid)
         return gid
 
@@ -230,10 +273,12 @@ class TrifectaClient:
         if not str(p).endswith(".gz"):
             p = Path(str(p) + ".snap.gz") if not str(p).endswith(".snap.gz") else p
         data = {
-            "version": 1,
+            "version": 2,
             "dim": self._dim,
             "records": self._records,
             "edges": self._edge_log,
+            "page_index": {f"{s}\x00{p}": gids for (s, p), gids in self._page_index.items()},
+            "gid_to_page": {gid: [s, p] for gid, (s, p) in self._gid_to_page.items()},
         }
         with gzip.open(str(p), "wb", compresslevel=5) as f:
             pickle.dump(data, f, protocol=4)
@@ -324,7 +369,25 @@ class TrifectaClient:
             client._engine.add_edge(src, tgt, _edge_map[etype_str])
             client._edge_log.append((src, tgt, etype_str))
 
-        logger.info("Snapshot loaded: engine has %d nodes", client.size)
+        # Restore page index (v2+); older snapshots rebuild from metadata.
+        raw_pi = data.get("page_index")
+        raw_g2p = data.get("gid_to_page")
+        if raw_pi and raw_g2p:
+            for key_str, gids in raw_pi.items():
+                s, p_str = key_str.split("\x00", 1)
+                client._page_index[(s, int(p_str))] = gids
+            for gid_str, sp in raw_g2p.items():
+                client._gid_to_page[int(gid_str)] = (sp[0], int(sp[1]))
+        else:
+            for rec in records:
+                try:
+                    meta = json.loads(rec["metadata"])
+                except Exception:
+                    continue
+                client._register_page(rec["gid"], meta)
+
+        logger.info("Snapshot loaded: engine has %d nodes, %d page entries",
+                     client.size, client.page_count)
         return client
 
     # ── Retrieval ────────────────────────────────────────────────────────────
