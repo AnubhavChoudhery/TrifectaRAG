@@ -99,9 +99,31 @@ class TrifectaClient:
         self._dim: int = _dim
         logger.info("Text model '%s' loaded, dim=%d", text_model, self._dim)
 
-        self._clip_model = CLIPModel.from_pretrained(clip_model).to(self._device)
+        for _kw in [
+            {"use_safetensors": True},
+            {"use_safetensors": True, "local_files_only": True},
+            {},
+        ]:
+            try:
+                self._clip_model = CLIPModel.from_pretrained(
+                    clip_model, **_kw
+                ).to(self._device)
+                break
+            except Exception:
+                continue
         self._clip_model.eval()
-        self._clip_processor = CLIPProcessor.from_pretrained(clip_model)
+
+        for _kw in [
+            {},
+            {"local_files_only": True},
+        ]:
+            try:
+                self._clip_processor = CLIPProcessor.from_pretrained(
+                    clip_model, **_kw
+                )
+                break
+            except Exception:
+                continue
         logger.info("CLIP model '%s' loaded", clip_model)
 
         self._engine = tr.TrifectaEngine(
@@ -622,7 +644,9 @@ class TrifectaClient:
         inputs = self._clip_processor(images=image, return_tensors="pt")
         pixel_values = inputs["pixel_values"].to(self._device)
         with torch.no_grad():
-            features = self._clip_model.get_image_features(pixel_values=pixel_values)
+            vision_out = self._clip_model.vision_model(pixel_values=pixel_values)
+            pooled = vision_out.pooler_output
+            features = self._clip_model.visual_projection(pooled)
         result = features.cpu().numpy().astype(np.float32).flatten()
         self._image_cache[img_hash] = result
         if len(self._image_cache) > self._embed_cache_max:
