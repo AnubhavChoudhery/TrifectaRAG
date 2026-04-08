@@ -169,7 +169,7 @@ def _make_mock_client():
         MockST.return_value = mock_st_inst
 
         mock_clip_inst = MagicMock()
-        mock_clip_inst.get_image_features.return_value = MagicMock(
+        mock_clip_inst.visual_projection.return_value = MagicMock(
             cpu=lambda: MagicMock(
                 numpy=lambda: np.random.randn(1, _MOCK_DIM).astype(np.float32)
             )
@@ -252,7 +252,7 @@ def test_v3_snapshot_roundtrip():
             MockST.return_value = mock_st_inst
 
             mock_clip_inst = MagicMock()
-            mock_clip_inst.get_image_features.return_value = MagicMock(
+            mock_clip_inst.visual_projection.return_value = MagicMock(
                 cpu=lambda: MagicMock(
                     numpy=lambda: np.random.randn(1, _MOCK_DIM).astype(np.float32)))
             MockCLIP.from_pretrained.return_value = mock_clip_inst

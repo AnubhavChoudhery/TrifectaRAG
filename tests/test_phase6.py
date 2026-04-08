@@ -197,16 +197,16 @@ def _make_client():
 
         _img_counter = [0]
 
-        def get_image_features(**kwargs):
-            feat = MagicMock()
+        def visual_proj_call(pooled):
             rng = np.random.RandomState(7777 + _img_counter[0])
             _img_counter[0] += 1
+            feat = MagicMock()
             feat.cpu.return_value.numpy.return_value = (
                 rng.randn(1, DIM).astype(np.float32)
             )
             return feat
 
-        mock_clip.get_image_features.side_effect = get_image_features
+        mock_clip.visual_projection = MagicMock(side_effect=visual_proj_call)
 
         # --- Processor mock ---
         mock_proc = MagicMock()
