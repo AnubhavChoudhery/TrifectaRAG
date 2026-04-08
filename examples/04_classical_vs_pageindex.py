@@ -18,7 +18,14 @@ sys.path.insert(0, str(_EX))
 
 import fitz
 
-from textbook_config import DATA_DIR, ensure_utf8_stdout, page_range_for_document, resolve_pdf_path
+from textbook_config import (
+    DATA_DIR,
+    ensure_utf8_stdout,
+    page_range_for_document,
+    resolve_pdf_path,
+    snapshot_exists,
+    snapshot_path,
+)
 from trifecta import TrifectaClient, PDFIngestor
 
 QUERIES = [
@@ -29,7 +36,8 @@ QUERIES = [
 ]
 
 
-def build(mode: str) -> TrifectaClient:
+def build(mode: str) -> tuple:
+    """Return (client, elapsed_s, from_snapshot: bool)."""
     pdf = resolve_pdf_path()
     doc = fitz.open(pdf)
     try:
@@ -37,6 +45,13 @@ def build(mode: str) -> TrifectaClient:
     finally:
         doc.close()
     pr = page_range_for_document(n, pdf)
+
+    snap = snapshot_path(pdf, mode, pr)
+    t0 = time.perf_counter()
+    if snapshot_exists(snap):
+        client = TrifectaClient.from_snapshot(str(snap), device="cpu")
+        elapsed = time.perf_counter() - t0
+        return client, elapsed, True
 
     client = TrifectaClient(device="cpu")
     ingestor = PDFIngestor(
@@ -47,7 +62,8 @@ def build(mode: str) -> TrifectaClient:
         output_dir=str(DATA_DIR / f"extracted_{mode}"),
         page_range=pr,
     )
-    return client
+    elapsed = time.perf_counter() - t0
+    return client, elapsed, False
 
 
 def query_mode(client: TrifectaClient):
@@ -81,17 +97,15 @@ def main() -> None:
     print("TrifectaRAG — Classical vs page-index (Numerical Analysis PDF)")
     print("=" * 70)
 
-    print("\nBuilding page-indexed engine...", end=" ", flush=True)
-    t0 = time.perf_counter()
-    page_client = build("page")
-    page_time = time.perf_counter() - t0
-    print(f"({page_time:.1f}s, {page_client.size} nodes, {page_client.page_count} pages)")
+    print("\nLoading/building page-indexed engine...", end=" ", flush=True)
+    page_client, page_time, page_from_snap = build("page")
+    src = " [from snapshot]" if page_from_snap else " [freshly ingested]"
+    print(f"({page_time:.1f}s{src}, {page_client.size} nodes, {page_client.page_count} pages)")
 
-    print("Building classical engine...", end=" ", flush=True)
-    t0 = time.perf_counter()
-    chunk_client = build("classical")
-    chunk_time = time.perf_counter() - t0
-    print(f"({chunk_time:.1f}s, {chunk_client.size} nodes, {chunk_client.page_count} pages)")
+    print("Loading/building classical engine...", end=" ", flush=True)
+    chunk_client, chunk_time, chunk_from_snap = build("classical")
+    src = " [from snapshot]" if chunk_from_snap else " [freshly ingested]"
+    print(f"({chunk_time:.1f}s{src}, {chunk_client.size} nodes, {chunk_client.page_count} pages)")
 
     page_results = query_mode(page_client)
     chunk_results = query_mode(chunk_client)

@@ -6,6 +6,12 @@ Prints full stored text for each TEXT hit and paths + captions for IMAGE hits
 
 Usage:
     python examples/02_query_textbook.py
+
+Env vars:
+    TRIFECTA_RAG_MODE   page | classical  (default: page)
+        page      -> one document per PDF page (preserves full page context)
+        classical -> overlapping ~256-word chunks (finer-grained retrieval)
+    TRIFECTA_TEXTBOOK_PDF  path to PDF (default: data/Numerical_Analysis.pdf)
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ sys.path.insert(0, str(_EX.parent))
 sys.path.insert(0, str(_EX))
 
 import fitz
+import os
 
 from textbook_config import (
     DATA_DIR,
@@ -96,9 +103,15 @@ def run_queries(client: TrifectaClient) -> None:
 
 def main() -> None:
     ensure_utf8_stdout()
-    print("TrifectaRAG — Textbook query demo (full text + image paths)\n")
 
-    client = build_engine("page")
+    mode = os.environ.get("TRIFECTA_RAG_MODE", "page").strip()
+    if mode not in ("page", "classical"):
+        print(f"  Warning: unknown TRIFECTA_RAG_MODE={mode!r}, defaulting to 'page'")
+        mode = "page"
+
+    print(f"TrifectaRAG — Textbook query demo (mode={mode!r}, full text + image paths)\n")
+
+    client = build_engine(mode)
     run_queries(client)
 
     print("Done.")

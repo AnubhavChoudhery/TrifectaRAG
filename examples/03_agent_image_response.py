@@ -11,6 +11,11 @@ Model: TRIFECTA_OLLAMA_MODEL env var, default qwen2.5:7b
 
 Usage:
     python examples/03_agent_image_response.py
+
+Env vars:
+    TRIFECTA_RAG_MODE       page | classical  (default: page)
+    TRIFECTA_OLLAMA_MODEL   Ollama model name (default: qwen2.5:7b)
+    TRIFECTA_TEXTBOOK_PDF   path to PDF (default: data/Numerical_Analysis.pdf)
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ sys.path.insert(0, str(_EX))
 
 import fitz
 import ollama
+import os
 
 from textbook_config import (
     DATA_DIR,
@@ -54,23 +60,23 @@ QUESTIONS = [
 ]
 
 
-def build_engine(pdf: Path, n: int) -> TrifectaClient:
+def build_engine(pdf: Path, n: int, mode: str) -> TrifectaClient:
     pr = page_range_for_document(n, pdf)
-    snap = snapshot_path(pdf, "page", pr)
+    snap = snapshot_path(pdf, mode, pr)
 
     if snapshot_exists(snap):
-        print(f"  Loading from snapshot: {snap.name}  (run 01 to re-ingest)")
+        print(f"  Loading {mode!r} snapshot: {snap.name}  (run 01 to re-ingest)")
         client = TrifectaClient.from_snapshot(str(snap), device="cpu")
         print(f"  Engine: {client.size} nodes, {client.page_count} pages\n")
         return client
 
-    print(f"  No snapshot found. Ingesting pages {pr.start + 1}..{pr.stop} ({len(pr)} pages)...")
+    print(f"  No snapshot found for mode={mode!r}. Ingesting pages {pr.start + 1}..{pr.stop} ({len(pr)} pages)...")
     print("  Tip: run 01_ingest_textbook.py first for fast reloads.\n")
     client = TrifectaClient(device="cpu")
-    ingestor = PDFIngestor(client, mode="page", min_img_px=60)
+    ingestor = PDFIngestor(client, mode=mode, min_img_px=60)
     stats = ingestor.ingest_pdf(
         str(pdf),
-        output_dir=str(DATA_DIR / "extracted_page"),
+        output_dir=str(DATA_DIR / f"extracted_{mode}"),
         page_range=pr,
     )
     print(
@@ -127,7 +133,13 @@ def ask_ollama(question: str, context: str, model: str) -> str:
 def main() -> None:
     ensure_utf8_stdout()
     model = ollama_model()
-    print(f"TrifectaRAG + Ollama ({model}) — Numerical Analysis RAG demo\n")
+
+    mode = os.environ.get("TRIFECTA_RAG_MODE", "page").strip()
+    if mode not in ("page", "classical"):
+        print(f"  Warning: unknown TRIFECTA_RAG_MODE={mode!r}, defaulting to 'page'")
+        mode = "page"
+
+    print(f"TrifectaRAG + Ollama ({model}) — Numerical Analysis RAG demo  (mode={mode!r})\n")
     print("=" * 72)
 
     pdf = resolve_pdf_path()
@@ -137,7 +149,7 @@ def main() -> None:
     finally:
         doc.close()
 
-    client = build_engine(pdf, n)
+    client = build_engine(pdf, n, mode)
 
     for q in QUESTIONS:
         print(f"\n{'=' * 72}")
