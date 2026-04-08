@@ -339,6 +339,14 @@ namespace math {
 void normalize_inplace(std::vector<float>& v) noexcept;
 
 /**
+ * normalize_inplace_raw(data, n)
+ * -------------------------------
+ * Same as normalize_inplace but operates on a raw float pointer + length.
+ * Used by HNSWIndex to normalize vectors directly in flat storage.
+ */
+void normalize_inplace_raw(float* data, std::size_t n) noexcept;
+
+/**
  * l2_distance_sq(a, b) → float
  * ------------------------------
  * Squared Euclidean distance — cheaper than L2 (avoids sqrt) and sufficient

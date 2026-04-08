@@ -19,17 +19,14 @@ void KnowledgeGraph::add_edge(uint32_t source_id, uint32_t target_id, EdgeType t
 
 std::vector<uint32_t> KnowledgeGraph::bfs_one_hop_neighbors(
     const std::vector<uint32_t>& seed_ids) const {
-    std::queue<uint32_t> q;
-    for (uint32_t s : seed_ids) {
-        q.push(s);
-    }
-
-    std::unordered_set<uint32_t> collected;
+    // Pre-populate the "collected" set with seed IDs so neighbors that are
+    // already in the seed set are excluded.  This prevents double-boosting
+    // in RRF: seeds already have retrieval scores; only genuinely new
+    // context neighbors should receive the flat KG boost.
+    std::unordered_set<uint32_t> collected(seed_ids.begin(), seed_ids.end());
     std::vector<uint32_t> out;
 
-    while (!q.empty()) {
-        const uint32_t u = q.front();
-        q.pop();
+    for (uint32_t u : seed_ids) {
         auto it = adj_.find(u);
         if (it == adj_.end()) {
             continue;

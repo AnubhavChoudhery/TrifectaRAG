@@ -76,11 +76,9 @@ void LexicalIndex::remove_document(uint32_t global_id) {
         t_it->second.erase(global_id);
         if (t_it->second.empty()) {
             term_doc_tf_.erase(t_it);
-            inverted_index_.erase(term);
-        } else {
-            rebuild_inverted_for_term(term);
         }
     }
+    inverted_dirty_ = true;
 
     doc_term_tf_.erase(doc_it);
     doc_lengths_.erase(global_id);
@@ -109,14 +107,33 @@ void LexicalIndex::add_document(uint32_t global_id, const std::string& text) {
     doc_term_tf_[global_id] = tf;
 
     for (const auto& p : tf) {
-        const std::string& term = p.first;
-        const std::uint32_t c   = p.second;
-        term_doc_tf_[term][global_id] = c;
-        rebuild_inverted_for_term(term);
+        term_doc_tf_[p.first][global_id] = p.second;
     }
 
+    inverted_dirty_ = true;
     ++document_count_;
     sum_doc_token_len_ += len;
+}
+
+void LexicalIndex::rebuild_inverted_index() {
+    inverted_index_.clear();
+    inverted_index_.reserve(term_doc_tf_.size());
+    for (const auto& term_entry : term_doc_tf_) {
+        std::vector<uint32_t> ids;
+        ids.reserve(term_entry.second.size());
+        for (const auto& p : term_entry.second) {
+            ids.push_back(p.first);
+        }
+        std::sort(ids.begin(), ids.end());
+        inverted_index_[term_entry.first] = std::move(ids);
+    }
+    inverted_dirty_ = false;
+}
+
+void LexicalIndex::ensure_index_built() {
+    if (inverted_dirty_) {
+        rebuild_inverted_index();
+    }
 }
 
 float LexicalIndex::average_document_length() const noexcept {
@@ -145,7 +162,8 @@ float LexicalIndex::idf(std::size_t num_docs, std::uint32_t df) noexcept {
 }
 
 std::vector<std::pair<uint32_t, float>>
-LexicalIndex::score_query(const std::string& query, std::size_t max_results) const {
+LexicalIndex::score_query(const std::string& query, std::size_t max_results) {
+    ensure_index_built();
     const std::vector<std::string> q_tokens = tokenize(query);
     if (q_tokens.empty() || document_count_ == 0) {
         return {};

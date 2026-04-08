@@ -44,19 +44,21 @@ public:
     /** Document frequency: number of distinct documents containing `term`. */
     [[nodiscard]] std::uint32_t document_frequency(const std::string& term) const;
 
-    /** Core inverted index: token -> sorted unique global_ids containing the term. */
-    [[nodiscard]] const std::unordered_map<std::string, std::vector<uint32_t>>& inverted_index()
-        const noexcept {
+    /** Core inverted index: token -> sorted unique global_ids containing the term.
+     *  Triggers a lazy rebuild if the index is dirty. */
+    [[nodiscard]] const std::unordered_map<std::string, std::vector<uint32_t>>& inverted_index() {
+        ensure_index_built();
         return inverted_index_;
     }
 
     /**
      * BM25 scores for documents matching at least one query token.
      * Results sorted descending by score, then ascending by global_id.
+     * Lazily rebuilds the inverted index if dirty (deferred from add_document).
      * @param max_results  0 = return all, >0 = return at most this many.
      */
     [[nodiscard]] std::vector<std::pair<uint32_t, float>>
-    score_query(const std::string& query, std::size_t max_results = 0) const;
+    score_query(const std::string& query, std::size_t max_results = 0);
 
     void set_bm25_params(float k1, float b) noexcept {
         k1_ = k1;
@@ -67,10 +69,13 @@ public:
     void load(std::istream& is);
 
 private:
+    void rebuild_inverted_index();
     void rebuild_inverted_for_term(const std::string& term);
+    void ensure_index_built();
 
     static float idf(std::size_t num_docs, std::uint32_t df) noexcept;
 
+    bool inverted_dirty_ = false;
     std::unordered_map<std::string, std::vector<uint32_t>> inverted_index_;
 
     /** term -> (global_id -> term frequency in that document). */

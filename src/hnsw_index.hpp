@@ -24,13 +24,13 @@ public:
 private:
     struct CompareByDistance {
         bool operator()(const std::pair<float, uint32_t>& a, const std::pair<float, uint32_t>& b) const {
-            return a.first < b.first; // max priority queue (longest distance at top)
+            return a.first < b.first;
         }
     };
     
     struct CompareByDistanceMin {
         bool operator()(const std::pair<float, uint32_t>& a, const std::pair<float, uint32_t>& b) const {
-            return a.first > b.first; // min priority queue (shortest distance at top)
+            return a.first > b.first;
         }
     };
 
@@ -41,24 +41,34 @@ private:
     size_t ef_construction_;
     double mult_;
     
-    std::vector<std::vector<float>> vectors_;
+    // Flat contiguous storage: all vectors packed into one allocation.
+    // vector i lives at offset i*dim_ .. (i+1)*dim_ - 1.
+    std::vector<float> flat_vectors_;
+    size_t             num_vectors_ = 0;
+
     std::vector<uint32_t> id_map_;
     
     int max_level_;
     uint32_t enter_point_;
     
-    std::vector<std::vector<std::vector<uint32_t>>> links_; // level -> node -> links
+    std::vector<std::vector<std::vector<uint32_t>>> links_;
     
     std::mt19937 generator_;
     
     int get_random_level();
-    void check_dim(const std::vector<float>& vec) const;
 
+    // Distance = 1.0 - dot(a, b).  Vectors are pre-normalized so dot == cosine.
     float get_distance(uint32_t a, uint32_t b) const;
-    float get_distance(const std::vector<float>& vec, uint32_t a) const;
+    float get_distance(const float* query, uint32_t a) const;
+
+    const float* vec_ptr(uint32_t internal_id) const {
+        return flat_vectors_.data() + static_cast<size_t>(internal_id) * dim_;
+    }
 
     std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, CompareByDistance> 
-    search_layer(uint32_t ep, const std::vector<float>& query, size_t ef, int level) const;
+    search_layer(uint32_t ep, const float* query, size_t ef, int level) const;
+
+    void prune_neighbors(uint32_t node, int level, size_t max_links);
 
     std::vector<uint32_t> select_neighbors(
         const std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, CompareByDistance>& candidates,

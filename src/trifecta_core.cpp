@@ -227,23 +227,33 @@ float cosine_similarity(const std::vector<float>& a,
  *
  * This function is a no-op on zero-norm vectors to avoid NaN propagation.
  */
-void normalize_inplace(std::vector<float>& v) noexcept {
-    const float norm = l2_norm(v);
-    constexpr float kEpsilon = 1e-10f;
-    if (norm < kEpsilon) return;   // degenerate zero vector — leave as-is
-
-    const float inv_norm = 1.0f / norm;   // multiply is cheaper than divide
-    const std::size_t n = v.size();
-    float* __restrict data = v.data();
-
+void normalize_inplace_raw(float* data, std::size_t n) noexcept {
+    float sq_sum = 0.0f;
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC ivdep
 #elif defined(_MSC_VER)
 #pragma loop(ivdep)
 #endif
     for (std::size_t i = 0; i < n; ++i) {
-        data[i] *= inv_norm;   // multiply by reciprocal — one FP op vs. divide
+        sq_sum += data[i] * data[i];
     }
+    const float norm = std::sqrt(sq_sum);
+    constexpr float kEpsilon = 1e-10f;
+    if (norm < kEpsilon) return;
+
+    const float inv_norm = 1.0f / norm;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#elif defined(_MSC_VER)
+#pragma loop(ivdep)
+#endif
+    for (std::size_t i = 0; i < n; ++i) {
+        data[i] *= inv_norm;
+    }
+}
+
+void normalize_inplace(std::vector<float>& v) noexcept {
+    normalize_inplace_raw(v.data(), v.size());
 }
 
 // =============================================================================

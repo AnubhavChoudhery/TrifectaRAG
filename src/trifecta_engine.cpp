@@ -74,7 +74,7 @@ std::vector<std::pair<uint32_t, float>>
 TrifectaEngine::query(const std::vector<float>& query_vec,
                       const std::string&        query_text,
                       std::size_t               top_k,
-                      std::size_t               search_ef) const
+                      std::size_t               search_ef)
 {
     if (query_vec.empty() && query_text.empty()) {
         return {};

@@ -127,7 +127,7 @@ public:
     query(const std::vector<float>& query_vec,
           const std::string&        query_text,
           std::size_t               top_k     = kDefaultTopK,
-          std::size_t               search_ef = kDefaultSearchEf) const;
+          std::size_t               search_ef = kDefaultSearchEf);
 
     // ── Binary Persistence ────────────────────────────────────────────────────
 

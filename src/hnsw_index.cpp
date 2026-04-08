@@ -3,10 +3,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <queue>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 
 namespace trifecta {
 
@@ -14,10 +14,11 @@ HNSWIndex::HNSWIndex(size_t dim, size_t M, size_t ef_construction, size_t max_el
     : dim_(dim), M_(M), M_max_(M), M_max0_(M * 2),
       ef_construction_(ef_construction),
       mult_(1.0 / log(1.0 * M_)),
+      num_vectors_(0),
       max_level_(-1), enter_point_(0),
       generator_(100)
 {
-    vectors_.reserve(max_elements);
+    flat_vectors_.reserve(max_elements * dim);
     id_map_.reserve(max_elements);
 }
 
@@ -27,22 +28,36 @@ int HNSWIndex::get_random_level() {
     return static_cast<int>(r);
 }
 
-void HNSWIndex::check_dim(const std::vector<float>& vec) const {
-    if (vec.size() != dim_) {
-        throw std::invalid_argument(
-            "HNSWIndex: expected vector dimension " + std::to_string(dim_) +
-            ", got " + std::to_string(vec.size()));
-    }
-}
-
+// Distance metric: 1 - dot(a, b).  All stored vectors are L2-normalized
+// at insertion time, so dot product equals cosine similarity.  This avoids
+// two sqrt() calls per distance computation vs. full cosine_similarity().
 float HNSWIndex::get_distance(uint32_t a, uint32_t b) const {
-    const float sim = math::cosine_similarity(vectors_[a], vectors_[b]);
-    return 1.0f - sim;
+    const float* pa = vec_ptr(a);
+    const float* pb = vec_ptr(b);
+    float dot = 0.0f;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#elif defined(_MSC_VER)
+#pragma loop(ivdep)
+#endif
+    for (size_t i = 0; i < dim_; ++i) {
+        dot += pa[i] * pb[i];
+    }
+    return 1.0f - dot;
 }
 
-float HNSWIndex::get_distance(const std::vector<float>& vec, uint32_t a) const {
-    const float sim = math::cosine_similarity(vec, vectors_[a]);
-    return 1.0f - sim;
+float HNSWIndex::get_distance(const float* query, uint32_t a) const {
+    const float* pa = vec_ptr(a);
+    float dot = 0.0f;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#elif defined(_MSC_VER)
+#pragma loop(ivdep)
+#endif
+    for (size_t i = 0; i < dim_; ++i) {
+        dot += query[i] * pa[i];
+    }
+    return 1.0f - dot;
 }
 
 std::vector<uint32_t> HNSWIndex::select_neighbors(
@@ -65,10 +80,33 @@ std::vector<uint32_t> HNSWIndex::select_neighbors(
     return res;
 }
 
+void HNSWIndex::prune_neighbors(uint32_t node, int level, size_t max_links) {
+    auto& nbrs = links_[level][node];
+    if (nbrs.size() <= max_links) return;
+
+    // Sort by distance to node, keep the closest max_links.
+    std::vector<std::pair<float, uint32_t>> scored;
+    scored.reserve(nbrs.size());
+    for (uint32_t n : nbrs) {
+        scored.push_back({get_distance(node, n), n});
+    }
+    std::sort(scored.begin(), scored.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+    nbrs.clear();
+    nbrs.reserve(max_links);
+    for (size_t i = 0; i < max_links; ++i) {
+        nbrs.push_back(scored[i].second);
+    }
+}
+
 std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, HNSWIndex::CompareByDistance> 
-HNSWIndex::search_layer(uint32_t ep, const std::vector<float>& query, size_t ef, int level) const {
-    std::unordered_set<uint32_t> visited;
-    visited.insert(ep);
+HNSWIndex::search_layer(uint32_t ep, const float* query, size_t ef, int level) const {
+    // Visited set: use flat vector<bool> for O(1) lookup when node count is
+    // moderate, falling back to unordered_set for very sparse graphs where
+    // allocating num_vectors_ bools would waste memory.
+    std::vector<bool> visited(num_vectors_, false);
+    visited[ep] = true;
     
     std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, CompareByDistanceMin> C;
     std::priority_queue<std::pair<float, uint32_t>, std::vector<std::pair<float, uint32_t>>, CompareByDistance> W;
@@ -84,8 +122,8 @@ HNSWIndex::search_layer(uint32_t ep, const std::vector<float>& query, size_t ef,
         if (c.first > f.first) break;
         
         for (uint32_t n : links_[level][c.second]) {
-            if (visited.find(n) == visited.end()) {
-                visited.insert(n);
+            if (!visited[n]) {
+                visited[n] = true;
                 f = W.top();
                 float dist = get_distance(query, n);
                 if (dist < f.first || W.size() < ef) {
@@ -102,14 +140,25 @@ HNSWIndex::search_layer(uint32_t ep, const std::vector<float>& query, size_t ef,
 }
 
 void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
-    check_dim(vec);
+    if (vec.size() != dim_) {
+        throw std::invalid_argument(
+            "HNSWIndex: expected vector dimension " + std::to_string(dim_) +
+            ", got " + std::to_string(vec.size()));
+    }
 
-    uint32_t id = static_cast<uint32_t>(vectors_.size());
-    vectors_.push_back(vec);
+    // Normalize and append to flat storage.
+    size_t old_size = flat_vectors_.size();
+    flat_vectors_.resize(old_size + dim_);
+    float* dest = flat_vectors_.data() + old_size;
+    std::memcpy(dest, vec.data(), dim_ * sizeof(float));
+    math::normalize_inplace_raw(dest, dim_);
+
+    uint32_t id = static_cast<uint32_t>(num_vectors_);
+    ++num_vectors_;
     id_map_.push_back(global_id);
     int level = get_random_level();
     
-    if (vectors_.size() == 1) {
+    if (num_vectors_ == 1) {
         max_level_ = level;
         enter_point_ = id;
         links_.resize(max_level_ + 1);
@@ -120,9 +169,9 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
     }
 
     if (level > (int)links_.size() - 1) {
-        int old_size = links_.size();
+        int old_lvl_size = links_.size();
         links_.resize(level + 1);
-        for (int i = old_size; i <= level; i++) {
+        for (int i = old_lvl_size; i <= level; i++) {
             links_[i].resize(id + 1, std::vector<uint32_t>());
         }
     }
@@ -133,9 +182,11 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
         }
     }
     
+    const float* query_ptr = vec_ptr(id);
+
     uint32_t ep = enter_point_;
     for (int l = max_level_; l > level; l--) {
-        auto W = search_layer(ep, vec, 1, l);
+        auto W = search_layer(ep, query_ptr, 1, l);
         auto picked = select_neighbors(W, 1);
         if (picked.empty()) {
             break;
@@ -144,16 +195,14 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
     }
     
     for (int l = std::min(level, max_level_); l >= 0; l--) {
-        auto W = search_layer(ep, vec, ef_construction_, l);
-        auto neighbors = select_neighbors(W, l == 0 ? M_max0_ : M_max_);
+        auto W = search_layer(ep, query_ptr, ef_construction_, l);
+        size_t max_links = l == 0 ? M_max0_ : M_max_;
+        auto neighbors = select_neighbors(W, max_links);
         links_[l][id] = neighbors;
         
         for (uint32_t n : neighbors) {
             links_[l][n].push_back(id);
-            if (links_[l][n].size() > (l == 0 ? M_max0_ : M_max_)) {
-                // simple truncate
-                links_[l][n].pop_back();
-            }
+            prune_neighbors(n, l, max_links);
         }
         if (!W.empty()) {
             ep = W.top().second;
@@ -167,20 +216,30 @@ void HNSWIndex::add_point(uint32_t global_id, const std::vector<float>& vec) {
 }
 
 std::vector<std::pair<uint32_t, float>> HNSWIndex::search(const std::vector<float>& query, size_t k, size_t ef) const {
-    check_dim(query);
-    if (vectors_.empty()) {
+    if (query.size() != dim_) {
+        throw std::invalid_argument(
+            "HNSWIndex: expected query dimension " + std::to_string(dim_) +
+            ", got " + std::to_string(query.size()));
+    }
+    if (num_vectors_ == 0) {
         return {};
     }
+
+    // Normalize query into a local buffer (caller's vector is const).
+    std::vector<float> nq(query);
+    math::normalize_inplace(nq);
+    const float* query_ptr = nq.data();
+
     uint32_t ep = enter_point_;
     for (int l = max_level_; l > 0; l--) {
-        auto W = search_layer(ep, query, 1, l);
+        auto W = search_layer(ep, query_ptr, 1, l);
         auto picked = select_neighbors(W, 1);
         if (picked.empty()) {
             break;
         }
         ep = picked[0];
     }
-    auto W = search_layer(ep, query, ef, 0);
+    auto W = search_layer(ep, query_ptr, ef, 0);
     std::vector<std::pair<uint32_t, float>> res;
     while (!W.empty()) {
         res.push_back({id_map_[W.top().second], 1.0f - W.top().first});
@@ -205,11 +264,10 @@ void HNSWIndex::save(std::ostream& os) const {
     io::write_i32(os, max_level_);
     io::write_u32(os, enter_point_);
 
-    const uint64_t n_vecs = vectors_.size();
-    io::write_u64(os, n_vecs);
-    for (const auto& v : vectors_) {
-        os.write(reinterpret_cast<const char*>(v.data()),
-                 static_cast<std::streamsize>(dim_ * sizeof(float)));
+    io::write_u64(os, num_vectors_);
+    if (num_vectors_ > 0) {
+        os.write(reinterpret_cast<const char*>(flat_vectors_.data()),
+                 static_cast<std::streamsize>(num_vectors_ * dim_ * sizeof(float)));
     }
 
     io::write_u64(os, id_map_.size());
@@ -241,13 +299,11 @@ void HNSWIndex::load(std::istream& is) {
     max_level_        = io::read_i32(is);
     enter_point_      = io::read_u32(is);
 
-    const uint64_t n_vecs = io::read_u64(is);
-    vectors_.clear();
-    vectors_.resize(static_cast<size_t>(n_vecs));
-    for (auto& v : vectors_) {
-        v.resize(dim_);
-        is.read(reinterpret_cast<char*>(v.data()),
-                static_cast<std::streamsize>(dim_ * sizeof(float)));
+    num_vectors_ = static_cast<size_t>(io::read_u64(is));
+    flat_vectors_.resize(num_vectors_ * dim_);
+    if (num_vectors_ > 0) {
+        is.read(reinterpret_cast<char*>(flat_vectors_.data()),
+                static_cast<std::streamsize>(num_vectors_ * dim_ * sizeof(float)));
     }
 
     const uint64_t n_ids = io::read_u64(is);
