@@ -28,6 +28,7 @@ import ollama
 
 from textbook_config import (
     DATA_DIR,
+    ensure_utf8_stdout,
     ollama_model,
     page_range_for_document,
     print_retrieval_result,
@@ -124,6 +125,7 @@ def ask_ollama(question: str, context: str, model: str) -> str:
 
 
 def main() -> None:
+    ensure_utf8_stdout()
     model = ollama_model()
     print(f"TrifectaRAG + Ollama ({model}) — Numerical Analysis RAG demo\n")
     print("=" * 72)

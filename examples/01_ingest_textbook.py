@@ -21,7 +21,7 @@ sys.path.insert(0, str(_EX))
 
 import fitz  # PyMuPDF
 
-from textbook_config import DATA_DIR, page_range_for_document, resolve_pdf_path, snapshot_path, snapshot_exists
+from textbook_config import DATA_DIR, ensure_utf8_stdout, page_range_for_document, resolve_pdf_path, snapshot_path, snapshot_exists
 from trifecta import TrifectaClient, PDFIngestor
 
 
@@ -67,6 +67,7 @@ def run_ingest(pdf: Path, page_range, mode: str) -> None:
 
 
 def main() -> None:
+    ensure_utf8_stdout()
     print("TrifectaRAG — Textbook PDF ingestion\n")
 
     pdf = resolve_pdf_path()

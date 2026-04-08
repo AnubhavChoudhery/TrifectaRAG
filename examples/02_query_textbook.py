@@ -22,6 +22,7 @@ import fitz
 
 from textbook_config import (
     DATA_DIR,
+    ensure_utf8_stdout,
     page_range_for_document,
     print_retrieval_result,
     resolve_pdf_path,
@@ -94,6 +95,7 @@ def run_queries(client: TrifectaClient) -> None:
 
 
 def main() -> None:
+    ensure_utf8_stdout()
     print("TrifectaRAG — Textbook query demo (full text + image paths)\n")
 
     client = build_engine("page")

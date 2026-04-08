@@ -19,8 +19,16 @@ Ollama:
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional
+
+
+def ensure_utf8_stdout() -> None:
+    """Reconfigure stdout/stderr for UTF-8 on Windows (cp1252 chokes on math symbols)."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DEFAULT_PDF_NAME = "Numerical_Analysis.pdf"

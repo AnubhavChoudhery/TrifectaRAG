@@ -18,7 +18,7 @@ sys.path.insert(0, str(_EX))
 
 import fitz
 
-from textbook_config import DATA_DIR, page_range_for_document, resolve_pdf_path
+from textbook_config import DATA_DIR, ensure_utf8_stdout, page_range_for_document, resolve_pdf_path
 from trifecta import TrifectaClient, PDFIngestor
 
 QUERIES = [
@@ -75,6 +75,7 @@ def format_result(r: dict) -> str:
 
 
 def main() -> None:
+    ensure_utf8_stdout()
     resolve_pdf_path()
 
     print("TrifectaRAG — Classical vs page-index (Numerical Analysis PDF)")
