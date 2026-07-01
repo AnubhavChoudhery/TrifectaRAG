@@ -189,7 +189,7 @@ def _make_client():
 
         mock_text.encode.side_effect = text_encode
 
-        # --- CLIP model: deterministic image embeddings ---
+        # --- CLIP model: deterministic image + text embeddings ---
         mock_clip = MagicMock()
         MockCLIP.from_pretrained.return_value = mock_clip
         mock_clip.to.return_value = mock_clip
@@ -208,16 +208,58 @@ def _make_client():
 
         mock_clip.visual_projection = MagicMock(side_effect=visual_proj_call)
 
-        # --- Processor mock ---
+        # CLIP text encoder mock: stable embeddings keyed on the input_ids tensor.
+        def text_model_call(input_ids=None, attention_mask=None):
+            try:
+                seed = int(abs(int(input_ids.sum().item()))) % (2 ** 31)
+            except Exception:
+                seed = 0
+            rng = np.random.RandomState(seed)
+            pooled = MagicMock()
+            pooled._rng_state = rng  # carry through to text_projection
+            out = MagicMock()
+            out.pooler_output = pooled
+            return out
+
+        def text_proj_call(pooled):
+            rng = getattr(pooled, "_rng_state", np.random.RandomState(0))
+            feat = MagicMock()
+            feat.cpu.return_value.numpy.return_value = (
+                rng.randn(1, DIM).astype(np.float32)
+            )
+            return feat
+
+        mock_clip.text_model = MagicMock(side_effect=text_model_call)
+        mock_clip.text_projection = MagicMock(side_effect=text_proj_call)
+
+        # --- Processor mock: dispatches on whether text= or images= is given ---
         mock_proc = MagicMock()
         MockProc.from_pretrained.return_value = mock_proc
 
         def process(**kwargs):
+            if "text" in kwargs and kwargs["text"] is not None:
+                text_arg = kwargs["text"]
+                if isinstance(text_arg, list):
+                    text_arg = text_arg[0] if text_arg else ""
+                # Build a deterministic "input_ids" so the embedding is stable.
+                seed = abs(hash(text_arg)) % (2 ** 31)
+                rng = np.random.RandomState(seed)
+                fake_ids = rng.randint(0, 1000, size=(1, 8))
+                import torch as _torch
+                ids = _torch.tensor(fake_ids, dtype=_torch.long)
+                mask = _torch.ones_like(ids)
+                ids_wrap = MagicMock(wraps=ids)
+                ids_wrap.to.return_value = ids
+                mask_wrap = MagicMock(wraps=mask)
+                mask_wrap.to.return_value = mask
+                return {"input_ids": ids_wrap, "attention_mask": mask_wrap}
             pv = MagicMock()
             pv.to.return_value = pv
             return {"pixel_values": pv}
 
         mock_proc.side_effect = process
+        # Tokenizer attribute for any legacy code paths that still touch it.
+        mock_proc.tokenizer = MagicMock()
 
         client = TrifectaClient(device="cpu")
 

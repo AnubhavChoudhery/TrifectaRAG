@@ -90,6 +90,9 @@ class TrifectaClient:
             )
 
         self._text_model = SentenceTransformer(text_model, device=self._device)
+        # CLIP text encoder hard-caps at 77 position embeddings (incl. CLS/EOS).
+        # sentence-transformers respects max_seq_length by truncating at tokenisation time.
+        self._text_model.max_seq_length = 77
         _dim = self._text_model.get_sentence_embedding_dimension()
         if _dim is None:
             probe = self._text_model.encode(
@@ -620,14 +623,35 @@ class TrifectaClient:
     # ── Private ──────────────────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> np.ndarray:
-        """Encode text via sentence-transformers -> float32 numpy vector (LRU cached)."""
+        """Encode text via HF CLIP text encoder -> float32 numpy vector (LRU cached).
+
+        We bypass sentence-transformers' CLIP wrapper here because it does not
+        honour `max_seq_length` and crashes on inputs > 77 tokens. Calling the
+        HF CLIP text model directly with `truncation=True, max_length=77`
+        guarantees compliance with the hard position-embedding limit.
+        """
         cached = self._text_cache.get(text)
         if cached is not None:
             self._text_cache.move_to_end(text)
             return cached
-        vec = self._text_model.encode(
-            text, convert_to_numpy=True, show_progress_bar=False
+
+        inputs = self._clip_processor(
+            text=[text],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77,
         )
+        input_ids = inputs["input_ids"].to(self._device)
+        attention_mask = inputs["attention_mask"].to(self._device)
+        with torch.no_grad():
+            text_out = self._clip_model.text_model(
+                input_ids=input_ids, attention_mask=attention_mask
+            )
+            pooled = text_out.pooler_output
+            features = self._clip_model.text_projection(pooled)
+        vec = features.cpu().numpy().astype(np.float32).flatten()
+
         result = np.asarray(vec, dtype=np.float32).flatten()
         self._text_cache[text] = result
         if len(self._text_cache) > self._embed_cache_max:

@@ -152,33 +152,69 @@ _MOCK_DIM = DIM
 _COUNTER = 0
 
 
-def _make_mock_client():
-    global _COUNTER
-    with patch("trifecta.client.SentenceTransformer") as MockST, \
-         patch("trifecta.client.CLIPModel") as MockCLIP, \
-         patch("trifecta.client.CLIPProcessor") as MockProc:
+def _install_clip_mocks(MockST, MockCLIP, MockProc):
+    """
+    Wire up mocks compatible with TrifectaClient's HF-CLIP-direct text path.
 
-        mock_st_inst = MagicMock()
-        mock_st_inst.get_sentence_embedding_dimension.return_value = _MOCK_DIM
-        def _encode_side(text, **kw):
-            global _COUNTER
-            _COUNTER += 1
-            rng = np.random.RandomState(_COUNTER)
-            return rng.randn(_MOCK_DIM).astype(np.float32)
-        mock_st_inst.encode.side_effect = _encode_side
-        MockST.return_value = mock_st_inst
+    Returns (mock_st_inst, mock_clip_inst, mock_proc_inst).
+    """
+    mock_st_inst = MagicMock()
+    mock_st_inst.get_sentence_embedding_dimension.return_value = _MOCK_DIM
+    mock_st_inst.encode.side_effect = (
+        lambda text, **kw: np.random.randn(_MOCK_DIM).astype(np.float32)
+    )
+    MockST.return_value = mock_st_inst
 
-        mock_clip_inst = MagicMock()
-        mock_clip_inst.visual_projection.return_value = MagicMock(
+    mock_clip_inst = MagicMock()
+    mock_clip_inst.visual_projection.return_value = MagicMock(
+        cpu=lambda: MagicMock(
+            numpy=lambda: np.random.randn(1, _MOCK_DIM).astype(np.float32)
+        )
+    )
+
+    def _text_model_call(input_ids=None, attention_mask=None):
+        out = MagicMock()
+        out.pooler_output = MagicMock()
+        return out
+
+    def _text_proj_call(pooled):
+        return MagicMock(
             cpu=lambda: MagicMock(
                 numpy=lambda: np.random.randn(1, _MOCK_DIM).astype(np.float32)
             )
         )
-        MockCLIP.from_pretrained.return_value = mock_clip_inst
 
-        mock_proc_inst = MagicMock()
-        mock_proc_inst.return_value = {"pixel_values": MagicMock(to=lambda d: MagicMock())}
-        MockProc.from_pretrained.return_value = mock_proc_inst
+    mock_clip_inst.text_model = MagicMock(side_effect=_text_model_call)
+    mock_clip_inst.text_projection = MagicMock(side_effect=_text_proj_call)
+    MockCLIP.from_pretrained.return_value = mock_clip_inst
+
+    mock_proc_inst = MagicMock()
+
+    def _process(**kwargs):
+        if "text" in kwargs and kwargs["text"] is not None:
+            import torch as _torch
+            ids = _torch.tensor([[1, 2, 3]], dtype=_torch.long)
+            mask = _torch.ones_like(ids)
+            ids_wrap = MagicMock()
+            ids_wrap.to.return_value = ids
+            mask_wrap = MagicMock()
+            mask_wrap.to.return_value = mask
+            return {"input_ids": ids_wrap, "attention_mask": mask_wrap}
+        return {"pixel_values": MagicMock(to=lambda d: MagicMock())}
+
+    mock_proc_inst.side_effect = _process
+    mock_proc_inst.tokenizer = MagicMock()
+    MockProc.from_pretrained.return_value = mock_proc_inst
+
+    return mock_st_inst, mock_clip_inst, mock_proc_inst
+
+
+def _make_mock_client():
+    with patch("trifecta.client.SentenceTransformer") as MockST, \
+         patch("trifecta.client.CLIPModel") as MockCLIP, \
+         patch("trifecta.client.CLIPProcessor") as MockProc:
+
+        _install_clip_mocks(MockST, MockCLIP, MockProc)
 
         from trifecta.client import TrifectaClient
         client = TrifectaClient(device="cpu")
@@ -245,18 +281,7 @@ def test_v3_snapshot_roundtrip():
              patch("trifecta.client.CLIPModel") as MockCLIP, \
              patch("trifecta.client.CLIPProcessor") as MockProc:
 
-            mock_st_inst = MagicMock()
-            mock_st_inst.get_sentence_embedding_dimension.return_value = _MOCK_DIM
-            mock_st_inst.encode.side_effect = lambda text, **kw: \
-                np.random.randn(_MOCK_DIM).astype(np.float32)
-            MockST.return_value = mock_st_inst
-
-            mock_clip_inst = MagicMock()
-            mock_clip_inst.visual_projection.return_value = MagicMock(
-                cpu=lambda: MagicMock(
-                    numpy=lambda: np.random.randn(1, _MOCK_DIM).astype(np.float32)))
-            MockCLIP.from_pretrained.return_value = mock_clip_inst
-            MockProc.from_pretrained.return_value = MagicMock()
+            _install_clip_mocks(MockST, MockCLIP, MockProc)
 
             from trifecta.client import TrifectaClient
             loaded = TrifectaClient.from_snapshot(base, device="cpu")
@@ -274,13 +299,13 @@ def test_v3_snapshot_roundtrip():
 def test_text_embedding_cache_hit():
     client = _make_mock_client()
     v1 = client._embed_text("cached query")
-    call_count_before = client._text_model.encode.call_count
+    call_count_before = client._clip_model.text_model.call_count
 
     v2 = client._embed_text("cached query")
-    call_count_after = client._text_model.encode.call_count
+    call_count_after = client._clip_model.text_model.call_count
 
     assert_eq(call_count_before, call_count_after,
-              "second call should not invoke encode (cache hit)")
+              "second call should not invoke CLIP text model (cache hit)")
     np.testing.assert_array_equal(v1, v2)
 
 
