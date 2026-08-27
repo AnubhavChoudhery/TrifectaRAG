@@ -1,0 +1,97 @@
+@import 'katex/dist/katex.min.css';
+@import 'highlight.js/styles/github-dark.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --chat-bg: #f7f7f8;
+    --chat-surface: #ffffff;
+    --chat-sidebar: #f0f0f0;
+    --chat-fg: #0d0d0d;
+    --chat-muted-fg: #6e6e80;
+    --chat-border: #e5e5e5;
+    --chat-muted: #ececf1;
+    --chat-accent: #10a37f;
+    --chat-accent-hover: #0d8c6d;
+  }
+
+  .dark {
+    --chat-bg: #212121;
+    --chat-surface: #2f2f2f;
+    --chat-sidebar: #171717;
+    --chat-fg: #ececec;
+    --chat-muted-fg: #9b9b9b;
+    --chat-border: #3f3f3f;
+    --chat-muted: #3a3a3a;
+    --chat-accent: #10a37f;
+    --chat-accent-hover: #12b88f;
+  }
+
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply bg-chat-bg text-chat-fg;
+    margin: 0;
+  }
+
+  #root {
+    @apply h-[100dvh];
+  }
+}
+
+@layer components {
+  .prose-chat .katex-display {
+    @apply my-4 overflow-x-auto rounded-xl px-4 py-3;
+    background-color: color-mix(in srgb, var(--chat-muted) 50%, transparent);
+  }
+
+  .typing-dot {
+    @apply h-2 w-2 rounded-full;
+    background-color: color-mix(in srgb, var(--chat-muted-fg) 60%, transparent);
+    animation: typing-bounce 1.2s infinite ease-in-out;
+  }
+
+  .animation-delay-150 {
+    animation-delay: 0.15s;
+  }
+
+  .animation-delay-300 {
+    animation-delay: 0.3s;
+  }
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--chat-border);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--chat-muted-fg);
+}
