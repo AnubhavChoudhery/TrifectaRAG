@@ -50,6 +50,14 @@ venv/
 *.egg-info/
 dist/
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Runtime uploads / extracted assets
+uploaded_pdfs/
+extracted_images/
+
 # Example data (large PDFs, extracted images)
 examples/data/*
 !examples/data/.gitkeep

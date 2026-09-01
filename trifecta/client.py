@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import pickle
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -44,6 +45,8 @@ from . import trifecta_py as tr
 logger = logging.getLogger(__name__)
 
 ImageInput = Union[str, Path, "Image.Image"]
+_FALLBACK_DIM = 512
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_+\-./]+")
 
 
 def _normalize(vec: np.ndarray) -> np.ndarray:
@@ -52,6 +55,40 @@ def _normalize(vec: np.ndarray) -> np.ndarray:
     if norm < 1e-12:
         return vec
     return vec / norm
+
+
+def _hash_text_embedding(text: str, dim: int = _FALLBACK_DIM) -> np.ndarray:
+    """Deterministic offline text embedding used when CLIP is unavailable."""
+    vec = np.zeros(dim, dtype=np.float32)
+    tokens = _TOKEN_RE.findall(text.lower())
+    if not tokens:
+        return vec
+
+    for token in tokens:
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        bucket = int.from_bytes(digest[:4], "little") % dim
+        sign = 1.0 if digest[4] & 1 else -1.0
+        vec[bucket] += sign
+
+    return _normalize(vec.astype(np.float32))
+
+
+def _hash_image_embedding(image: Image.Image, dim: int = _FALLBACK_DIM) -> np.ndarray:
+    """Small deterministic image signature for offline figure indexing."""
+    thumb = image.convert("RGB").resize((32, 32))
+    arr = np.asarray(thumb, dtype=np.float32) / 255.0
+    vec = np.zeros(dim, dtype=np.float32)
+
+    means = arr.mean(axis=(0, 1))
+    stds = arr.std(axis=(0, 1))
+    vec[:3] = means
+    vec[3:6] = stds
+
+    digest = hashlib.blake2b(arr.tobytes(), digest_size=32).digest()
+    for i, b in enumerate(digest):
+        vec[6 + i] = (float(b) / 255.0) - 0.5
+
+    return _normalize(vec)
 
 
 class TrifectaClient:
@@ -78,53 +115,33 @@ class TrifectaClient:
     ) -> None:
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("TrifectaClient: device=%s", self._device)
+        self._clip_model = None
+        self._clip_processor = None
+        self._using_fallback_embeddings = True
+        self._dim = _FALLBACK_DIM
 
-        if SentenceTransformer is None:
-            raise ImportError(
-                "sentence-transformers failed to import (often Keras 3 vs transformers). "
-                "Try: pip install tf-keras"
-            )
-        if CLIPModel is None or CLIPProcessor is None:
-            raise ImportError(
-                "transformers CLIP failed to import. Try: pip install tf-keras"
-            )
-
-        self._text_model = SentenceTransformer(text_model, device=self._device)
-        _dim = self._text_model.get_sentence_embedding_dimension()
-        if _dim is None:
-            probe = self._text_model.encode(
-                "dim", convert_to_numpy=True, show_progress_bar=False
-            )
-            _dim = int(np.asarray(probe).reshape(-1).shape[0])
-        self._dim: int = _dim
-        logger.info("Text model '%s' loaded, dim=%d", text_model, self._dim)
-
-        for _kw in [
-            {"use_safetensors": True},
-            {"use_safetensors": True, "local_files_only": True},
-            {},
-        ]:
+        if CLIPModel is not None and CLIPProcessor is not None:
             try:
                 self._clip_model = CLIPModel.from_pretrained(
-                    clip_model, **_kw
+                    clip_model,
+                    use_safetensors=True,
+                    local_files_only=True,
                 ).to(self._device)
-                break
-            except Exception:
-                continue
-        self._clip_model.eval()
-
-        for _kw in [
-            {},
-            {"local_files_only": True},
-        ]:
-            try:
+                self._clip_model.eval()
                 self._clip_processor = CLIPProcessor.from_pretrained(
-                    clip_model, **_kw
+                    clip_model,
+                    local_files_only=True,
                 )
-                break
-            except Exception:
-                continue
-        logger.info("CLIP model '%s' loaded", clip_model)
+                self._dim = int(getattr(self._clip_model.config, "projection_dim", _FALLBACK_DIM))
+                self._using_fallback_embeddings = False
+                logger.info("CLIP model '%s' loaded locally, dim=%d", clip_model, self._dim)
+            except Exception as exc:
+                logger.warning(
+                    "CLIP model not available locally (%s). Using offline hash embeddings.",
+                    exc,
+                )
+        else:
+            logger.warning("transformers CLIP is unavailable. Using offline hash embeddings.")
 
         self._engine = tr.TrifectaEngine(
             dim=self._dim,
@@ -620,14 +637,42 @@ class TrifectaClient:
     # ── Private ──────────────────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> np.ndarray:
-        """Encode text via sentence-transformers -> float32 numpy vector (LRU cached)."""
+        """Encode text via HF CLIP text encoder -> float32 numpy vector (LRU cached).
+
+        We bypass sentence-transformers' CLIP wrapper here because it does not
+        honour `max_seq_length` and crashes on inputs > 77 tokens. Calling the
+        HF CLIP text model directly with `truncation=True, max_length=77`
+        guarantees compliance with the hard position-embedding limit.
+        """
         cached = self._text_cache.get(text)
         if cached is not None:
             self._text_cache.move_to_end(text)
             return cached
-        vec = self._text_model.encode(
-            text, convert_to_numpy=True, show_progress_bar=False
+
+        if self._using_fallback_embeddings or self._clip_model is None or self._clip_processor is None:
+            result = _hash_text_embedding(text, self._dim)
+            self._text_cache[text] = result
+            if len(self._text_cache) > self._embed_cache_max:
+                self._text_cache.popitem(last=False)
+            return result
+
+        inputs = self._clip_processor(
+            text=[text],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77,
         )
+        input_ids = inputs["input_ids"].to(self._device)
+        attention_mask = inputs["attention_mask"].to(self._device)
+        with torch.no_grad():
+            text_out = self._clip_model.text_model(
+                input_ids=input_ids, attention_mask=attention_mask
+            )
+            pooled = text_out.pooler_output
+            features = self._clip_model.text_projection(pooled)
+        vec = features.cpu().numpy().astype(np.float32).flatten()
+
         result = np.asarray(vec, dtype=np.float32).flatten()
         self._text_cache[text] = result
         if len(self._text_cache) > self._embed_cache_max:
@@ -641,6 +686,14 @@ class TrifectaClient:
         if cached is not None:
             self._image_cache.move_to_end(img_hash)
             return cached
+
+        if self._using_fallback_embeddings or self._clip_model is None or self._clip_processor is None:
+            result = _hash_image_embedding(image, self._dim)
+            self._image_cache[img_hash] = result
+            if len(self._image_cache) > self._embed_cache_max:
+                self._image_cache.popitem(last=False)
+            return result
+
         inputs = self._clip_processor(images=image, return_tensors="pt")
         pixel_values = inputs["pixel_values"].to(self._device)
         with torch.no_grad():

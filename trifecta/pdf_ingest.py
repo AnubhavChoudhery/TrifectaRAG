@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,6 +30,65 @@ from . import trifecta_py as tr
 logger = logging.getLogger(__name__)
 
 _WHITESPACE = re.compile(r"\s+")
+
+
+def _page_text_blocks(page: Any) -> str:
+    """
+    Extract page text in reading order using PyMuPDF's blocks mode.
+
+    Blocks are sorted top-to-bottom, then left-to-right, which preserves
+    two-column textbook layouts much better than the default `get_text("text")`
+    flat string (which can interleave columns).
+    """
+    try:
+        blocks = page.get_text("blocks")  # list of (x0,y0,x1,y1,text,block_no,type)
+    except Exception:
+        return page.get_text("text").strip()
+
+    text_blocks = [b for b in blocks if len(b) >= 5 and isinstance(b[4], str)]
+    # Sort by y first (top→bottom) then x (left→right) with a 20pt y-tolerance.
+    text_blocks.sort(key=lambda b: (round(b[1] / 20.0), b[0]))
+    lines = [b[4].strip() for b in text_blocks if b[4].strip()]
+    return "\n\n".join(lines)
+
+
+def _strip_boilerplate(pages: List[str], min_repeat_frac: float = 0.6) -> List[str]:
+    """
+    Remove lines that appear on at least `min_repeat_frac` of pages — these are
+    almost always running headers, footers, page numbers, or chapter titles.
+
+    Pure digits (page numbers) are always stripped.
+    """
+    if len(pages) < 3:
+        return pages
+
+    # Count lines that look like headers/footers — only consider first 2 and last
+    # 2 non-empty lines per page (where boilerplate lives).
+    edge_counts: Counter[str] = Counter()
+    for raw in pages:
+        non_empty = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        edges = non_empty[:2] + non_empty[-2:]
+        for ln in edges:
+            edge_counts[ln] += 1
+
+    threshold = max(2, int(len(pages) * min_repeat_frac))
+    boilerplate = {ln for ln, c in edge_counts.items() if c >= threshold}
+
+    cleaned: List[str] = []
+    for raw in pages:
+        kept = []
+        for ln in raw.splitlines():
+            s = ln.strip()
+            if not s:
+                kept.append("")
+                continue
+            if s in boilerplate:
+                continue
+            if s.isdigit() and len(s) <= 4:  # bare page number
+                continue
+            kept.append(ln)
+        cleaned.append("\n".join(kept).strip())
+    return cleaned
 
 # ── Vector-figure extraction tuning ──────────────────────────────────────────
 # A page needs this many PDF drawing paths before we consider it a figure page.
@@ -257,15 +317,19 @@ class PDFIngestor:
         # figure reused across pages) is only embedded and stored once.
         seen_xrefs: set = set()
 
-        for page_idx in pages_to_process:
-            if page_idx >= len(doc):
-                break
+        # ── Pass 1: pull text from every page in reading order ─────────────
+        page_indices = [i for i in pages_to_process if i < len(doc)]
+        raw_pages: List[str] = [_page_text_blocks(doc[i]) for i in page_indices]
+        cleaned_pages: List[str] = _strip_boilerplate(raw_pages)
+
+        # ── Pass 2: ingest text + images per page ─────────────────────────
+        for page_pos, page_idx in enumerate(page_indices):
             page = doc[page_idx]
             page_num = page_idx + 1
             stats["pages"] += 1
 
             # ── Text ──────────────────────────────────────────────────────
-            raw_text = page.get_text("text").strip()
+            raw_text = cleaned_pages[page_pos].strip()
             text_gids: List[int] = []
 
             if raw_text:
@@ -325,7 +389,7 @@ class PDFIngestor:
                 except Exception:
                     continue
 
-                cap = _find_caption(page.get_text("text"), page_num, src_name)
+                cap = _find_caption(raw_text, page_num, src_name)
                 img_gid = self._client.add_image(
                     image=pil_img,
                     caption=cap,
