@@ -44,6 +44,31 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             <ImagePreviewCard preview={message.imagePreview} />
           </div>
         )}
+
+        {message.sources && message.sources.length > 0 && (
+          <details className="pt-2">
+            <summary className="cursor-pointer text-[11px] text-chat-muted-fg">
+              Sources · {message.sources.length} · hybrid HNSW+BM25+KG+MMR
+            </summary>
+            <ul className="mt-2 space-y-1.5 text-[12px] leading-5 text-chat-muted-fg">
+              {message.sources.slice(0, 8).map((src, i) => (
+                <li key={`${src.global_id ?? i}-${src.page ?? 0}`}>
+                  <span className="font-medium text-chat-fg/80">{src.source ?? 'PDF'}</span>
+                  {src.page != null ? ` p.${src.page}` : ''}
+                  {src.global_id != null ? ` · gid ${src.global_id}` : ''}
+                  {src.score != null ? ` · rrf ${src.score.toFixed(3)}` : ''}
+                  {src.text_preview ? ` — ${src.text_preview.slice(0, 140)}` : ''}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
+        {message.toolsUsed && message.toolsUsed.length > 0 && (
+          <p className="pt-1 text-[11px] text-chat-muted-fg">
+            Used {message.toolsUsed.join(' · ')}
+          </p>
+        )}
       </div>
     </div>
   )

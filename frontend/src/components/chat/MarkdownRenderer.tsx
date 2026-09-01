@@ -6,6 +6,7 @@ import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
 import type { ImgHTMLAttributes } from 'react'
 import { useState } from 'react'
+import { normalizeMath } from '../../lib/normalizeMath'
 
 type MarkdownRendererProps = {
   content: string
@@ -18,7 +19,7 @@ function MarkdownImage({ src, alt, ...props }: ImgHTMLAttributes<HTMLImageElemen
   if (failed) {
     return (
       <div className="my-4 rounded-xl border border-chat-border bg-chat-muted/60 px-4 py-3 text-sm text-chat-muted-fg">
-        Image unavailable. Make sure the FastAPI backend is running on port 8001, then refresh or ask again.
+        Image unavailable. Start the FastAPI backend with <code>python api.py</code> (port 8001), then refresh or ask again.
       </div>
     )
   }
@@ -188,7 +189,7 @@ export default function MarkdownRenderer({ content, className = '' }: MarkdownRe
         ]}
         components={components}
       >
-        {content}
+        {normalizeMath(content)}
       </ReactMarkdown>
     </div>
   )
