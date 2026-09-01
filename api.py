@@ -27,36 +27,122 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("uploaded_pdfs")
-IMAGE_DIR = Path("extracted_images")
+REPO_ROOT = Path(__file__).resolve().parent
+UPLOAD_DIR = REPO_ROOT / "uploaded_pdfs"
+ATTACH_DIR = UPLOAD_DIR / "attachments"
+IMAGE_DIR = REPO_ROOT / "extracted_images"
+DATA_DIR = REPO_ROOT / "examples" / "data"
+EXTRACTED_DIRS = [
+    DATA_DIR / "extracted_page",
+    DATA_DIR / "extracted_classical",
+    IMAGE_DIR,
+]
+PDF_SEARCH_DIRS = [UPLOAD_DIR, DATA_DIR]
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120"))
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", os.getenv("TRIFECTA_OLLAMA_MODEL", "qwen2.5:7b"))
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 
-os.environ.setdefault("MPLCONFIGDIR", "/private/tmp/trifecta_matplotlib")
+os.environ.setdefault("MPLCONFIGDIR", str(REPO_ROOT / ".matplotlib"))
 
 UPLOAD_DIR.mkdir(exist_ok=True)
+ATTACH_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_DIR.mkdir(exist_ok=True)
 
 _client: Optional["TrifectaClient"] = None
 _client_lock = Lock()
+_corpus_label = "empty"
+_disabled_sources: set[str] = set()
 
 # Thread pool for CPU-bound ingestion so the event loop stays unblocked
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
+def _default_snapshot() -> Optional[Path]:
+    """Prefer a page-mode textbook snapshot so Study Tutor has a ready corpus."""
+    page_snaps = sorted(DATA_DIR.glob("*_page_*.trifecta"))
+    if page_snaps:
+        return page_snaps[0]
+    any_snaps = sorted(DATA_DIR.glob("*.trifecta"))
+    return any_snaps[0] if any_snaps else None
+
+
+def _find_pdf(source: str) -> Optional[Path]:
+    stem = Path(source).stem if source else ""
+    if not stem:
+        return None
+    for directory in PDF_SEARCH_DIRS:
+        candidate = directory / f"{stem}.pdf"
+        if candidate.is_file():
+            return candidate
+        matches = sorted(directory.glob(f"{stem}.*"))
+        for match in matches:
+            if match.suffix.lower() == ".pdf":
+                return match
+    return None
+
+
+def _iter_known_pdfs() -> list[Path]:
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for directory in PDF_SEARCH_DIRS:
+        if not directory.is_dir():
+            continue
+        for pdf in sorted(directory.glob("*.pdf")):
+            resolved = pdf.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            out.append(pdf)
+    return out
+
+
+def _is_allowed_image(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    if resolved.suffix.lower() not in _IMAGE_SUFFIXES or not resolved.is_file():
+        return False
+    allowed_roots = [p.resolve() for p in [*EXTRACTED_DIRS, UPLOAD_DIR, ATTACH_DIR] if p.exists()]
+    return any(resolved == root or root in resolved.parents for root in allowed_roots)
+
+
 def get_client() -> "TrifectaClient":
     """Load the Trifecta engine on first use (models can take ~1 min)."""
-    global _client
+    global _client, _corpus_label
     if _client is None:
         with _client_lock:
             if _client is None:
                 from trifecta.client import TrifectaClient
 
                 logging.info("Loading Trifecta engine (first start may take a minute)...")
-                _client = TrifectaClient(device="cpu")
-                logging.info("Trifecta engine ready (%d indexed chunks).", _client.size)
+                snap = _default_snapshot()
+                if snap is not None:
+                    logging.info("Restoring snapshot %s", snap.name)
+                    _client = TrifectaClient.from_snapshot(str(snap), device="cpu")
+                    _corpus_label = snap.stem
+                else:
+                    _client = TrifectaClient(device="cpu")
+                    _corpus_label = "empty"
+                logging.info(
+                    "Trifecta engine ready (%d indexed chunks, corpus=%s).",
+                    _client.size,
+                    _corpus_label,
+                )
     return _client
+
+
+def allowed_sources() -> Optional[set[str]]:
+    """None means every indexed source is searchable; a set is an allow-list."""
+    if _client is None:
+        return None
+    names = set(_client.list_sources())
+    if not names:
+        return None
+    if not _disabled_sources:
+        return None
+    return names - _disabled_sources
 
 
 @app.on_event("startup")
@@ -71,6 +157,36 @@ _tasks: dict = {}
 class AskRequest(BaseModel):
     question: str
     top_k: int = 5
+    mode: str = "study"
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class AttachmentIn(BaseModel):
+    type: str = "file"
+    name: str = ""
+    text: str = ""
+    image_path: Optional[str] = None
+    similar: Optional[str] = None
+
+
+class ChatRequest(BaseModel):
+    mode: str = "agent"
+    messages: list[ChatTurn] = []
+    question: Optional[str] = None
+    attachments: list[AttachmentIn] = []
+
+
+class ToggleCorpusRequest(BaseModel):
+    name: str
+    enabled: bool = True
+
+
+class IngestKnownRequest(BaseModel):
+    filename: str
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -82,6 +198,9 @@ def _run_ingestion(task_id: str, pdf_path: Path, filename: str) -> None:
     try:
         ingestor = PDFIngestor(get_client(), mode="page")
         stats = ingestor.ingest_pdf(str(pdf_path), output_dir=str(IMAGE_DIR))
+        global _corpus_label
+        _corpus_label = Path(filename).stem
+        _disabled_sources.discard(Path(filename).stem)
         _tasks[task_id].update(status="done", stats=stats)
         logging.info("Ingestion done for %s: %s", filename, stats)
     except Exception as exc:
@@ -134,9 +253,15 @@ def health():
         "status": "ok",
         "engine_ready": _client is not None,
         "indexed_chunks": _client.size if _client is not None else 0,
+        "page_count": _client.page_count if _client is not None else 0,
+        "corpus": _corpus_label,
         "pending_tasks": sum(1 for task in _tasks.values() if task.get("status") == "processing"),
         "ollama_model": OLLAMA_MODEL,
         "ollama_url": OLLAMA_URL,
+        "agent": True,
+        "retrieval": "hnsw+bm25+kg+rrf+mmr",
+        "active_sources": sorted(allowed_sources() or (_client.list_sources() if _client is not None else [])),
+        "disabled_sources": sorted(_disabled_sources),
     }
 
 
@@ -178,90 +303,323 @@ def ingest_status(task_id: str):
     return task
 
 
-@app.post("/ask")
-def ask_question(req: AskRequest):
-    engine = get_client()
-    if engine.size == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="No documents ingested yet. Please upload a PDF first."
-        )
+def _extract_docx_text(path: Path) -> str:
+    import zipfile
+    from xml.etree import ElementTree as ET
 
+    with zipfile.ZipFile(path) as archive:
+        root = ET.fromstring(archive.read("word/document.xml"))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    parts = []
+    for node in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"):
+        if node.text:
+            parts.append(node.text)
+        if node.tail:
+            parts.append(node.tail)
+    text = " ".join(parts)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_pdf_text(path: Path, max_pages: int = 8) -> str:
+    import fitz
+
+    doc = fitz.open(path)
+    blocks = []
     try:
-        raw_results = engine.query(text=req.question, top_k=max(req.top_k, 12))
-        results = engine.get_results(raw_results)
-    except Exception as exc:
-        logging.exception("Query failed")
-        raise HTTPException(status_code=500, detail=f"Retrieval error: {exc}") from exc
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                blocks.append(f"\n[… {doc.page_count - max_pages} more pages not inlined; index the PDF from Library to search all of them.]")
+                break
+            blocks.append(f"--- page {i + 1} ---\n{page.get_text() or ''}")
+    finally:
+        doc.close()
+    return "\n".join(blocks).strip()
 
-    text_hits: list = []
-    image_hits: list = []
-    sources: list = []
 
-    for r in results:
-        metadata = r.get("metadata", {})
-        modality = r.get("modality")
-        full_text = (
-            metadata.get("full_text")
-            or metadata.get("text_preview")
-            or metadata.get("caption")
-            or ""
+def _chunk_text(text: str, size: int = 1200) -> list[str]:
+    paras = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    chunks: list[str] = []
+    buf = ""
+    for para in paras or [text]:
+        if len(buf) + len(para) + 2 <= size:
+            buf = f"{buf}\n\n{para}".strip()
+            continue
+        if buf:
+            chunks.append(buf)
+        if len(para) <= size:
+            buf = para
+        else:
+            for i in range(0, len(para), size):
+                chunks.append(para[i:i + size])
+            buf = ""
+    if buf:
+        chunks.append(buf)
+    return chunks or ([text[:size]] if text.strip() else [])
+
+
+def _run_text_ingestion(task_id: str, path: Path, filename: str) -> None:
+    try:
+        ext = path.suffix.lower()
+        if ext == ".docx":
+            text = _extract_docx_text(path)
+        else:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        chunks = _chunk_text(text)
+        client = get_client()
+        stem = Path(filename).stem
+        for i, chunk in enumerate(chunks, 1):
+            client.add_document(
+                chunk,
+                metadata={
+                    "source": stem,
+                    "page": i,
+                    "full_text": chunk,
+                    "text_preview": chunk[:240],
+                    "type": "document",
+                },
+            )
+        global _corpus_label
+        _corpus_label = stem
+        _disabled_sources.discard(stem)
+        _tasks[task_id].update(
+            status="done",
+            stats={"pages": len(chunks), "text_chunks": len(chunks), "images": 0, "kg_edges": 0},
         )
+        logging.info("Text ingestion done for %s (%d chunks)", filename, len(chunks))
+    except Exception as exc:
+        logging.exception("Text ingestion failed for %s", filename)
+        _tasks[task_id].update(status="error", error=str(exc))
 
-        hit = {
-            "source": metadata.get("source") or "Unknown",
-            "page": metadata.get("page"),
-            "text": full_text,
-            "score": r.get("score", 0.0),
-            "caption": metadata.get("caption"),
-            "image_path": metadata.get("image_path"),
-        }
-        if modality == "IMAGE":
-            image_hits.append(hit)
-        elif full_text:
-            text_hits.append(hit)
 
-        sources.append({
-            "global_id": r.get("global_id"),
-            "score": r.get("score"),
-            "modality": modality,
-            "source": metadata.get("source"),
-            "page": metadata.get("page"),
-            "text_preview": metadata.get("text_preview"),
-            "image_path": metadata.get("image_path"),
-        })
+@app.post("/upload")
+async def upload_document(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename.")
+    safe_name = Path(file.filename).name
+    ext = Path(safe_name).suffix.lower()
+    if ext not in {".pdf", ".docx", ".txt", ".md", ".csv"}:
+        raise HTTPException(status_code=400, detail="Use PDF, DOCX, TXT, MD, or CSV.")
 
-    text_hits = _rank_text_hits(req.question, text_hits)[: req.top_k]
-    if not _is_visual_request(req.question):
-        text_hits = _merge_text_hits(
-            _scan_uploaded_pdfs_for_text_hits(req.question),
-            text_hits,
-        )[: max(req.top_k, 5)]
-    if _is_visual_request(req.question):
-        generated_hit = _generated_graph_hit(req.question)
-        text_hits = _merge_text_hits(
-            _scan_uploaded_pdfs_for_visual_hits(req.question),
-            text_hits,
-        )[: req.top_k]
-        image_hits = _expand_visual_hits(image_hits, text_hits, req.question)
-        if generated_hit:
-            image_hits = [generated_hit]
-    image_hits = image_hits[: max(req.top_k, 6)]
-    answer_markdown = build_answer_markdown(req.question, text_hits, image_hits)
+    dest = UPLOAD_DIR / safe_name
+    try:
+        with dest.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                out.write(chunk)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"File save failed: {exc}") from exc
+
+    task_id = str(uuid.uuid4())
+    _tasks[task_id] = {
+        "status": "processing",
+        "filename": safe_name,
+        "stats": None,
+        "error": None,
+    }
+    if ext == ".pdf":
+        _executor.submit(_run_ingestion, task_id, dest, safe_name)
+    else:
+        _executor.submit(_run_text_ingestion, task_id, dest, safe_name)
+    return {"task_id": task_id, "status": "processing", "filename": safe_name}
+
+
+@app.post("/attach")
+async def attach_file(file: UploadFile = File(...)):
+    """Parse a chat attachment for this turn without necessarily indexing it."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename.")
+    safe_name = Path(file.filename).name
+    ext = Path(safe_name).suffix.lower()
+    dest = ATTACH_DIR / safe_name
+    try:
+        with dest.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                out.write(chunk)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"File save failed: {exc}") from exc
+
+    kind = "file"
+    text = ""
+    similar = ""
+    image_path = None
+    try:
+        if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            kind = "image"
+            image_path = str(dest.resolve())
+            engine = get_client()
+            if engine.size:
+                from trifecta.retrieve import format_passages, hybrid_search
+
+                hits = hybrid_search(
+                    engine,
+                    query=safe_name,
+                    image=image_path,
+                    top_k=4,
+                    allowed_sources=allowed_sources(),
+                )
+                similar = format_passages(hits, _excerpt) if hits else ""
+            text = (
+                f"User attached an image ({safe_name}). "
+                "The local model cannot see pixels; use the similar library hits below "
+                "and the user's caption."
+            )
+        elif ext == ".pdf":
+            kind = "pdf"
+            text = _extract_pdf_text(dest)
+        elif ext == ".docx":
+            kind = "docx"
+            text = _extract_docx_text(dest)
+        elif ext in {".txt", ".md", ".csv"}:
+            kind = ext.lstrip(".")
+            text = dest.read_text(encoding="utf-8", errors="replace")[:8000]
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported attachment type.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read {safe_name}: {exc}") from exc
 
     return {
-        "question": req.question,
-        "answer_markdown": answer_markdown,
-        "sources": sources,
+        "type": kind,
+        "name": safe_name,
+        "text": text[:8000],
+        "image_path": image_path,
+        "similar": similar,
     }
+
+
+@app.get("/corpora")
+def list_corpora():
+    engine = _client
+    sources = engine.list_sources() if engine is not None else []
+    items = []
+    for name in sources:
+        pages = engine.list_pages(name) if engine is not None else []
+        chunks = 0
+        if engine is not None:
+            for page in pages:
+                chunks += len(engine.get_page_chunks(name, page))
+        items.append({
+            "name": name,
+            "kind": "source",
+            "indexed": True,
+            "enabled": name not in _disabled_sources,
+            "pages": len(pages),
+            "chunks": chunks,
+            "filename": None,
+        })
+
+    indexed_names = {item["name"] for item in items}
+    for pdf in _iter_known_pdfs():
+        if pdf.stem in indexed_names:
+            continue
+        items.append({
+            "name": pdf.stem,
+            "kind": "pdf",
+            "indexed": False,
+            "enabled": False,
+            "pages": None,
+            "chunks": 0,
+            "filename": pdf.name,
+        })
+    snapshots = []
+    if DATA_DIR.is_dir():
+        for snap in sorted(DATA_DIR.glob("*.trifecta")):
+            snapshots.append({"name": snap.stem, "filename": snap.name})
+    return {
+        "items": items,
+        "snapshots": snapshots,
+        "engine_size": engine.size if engine is not None else 0,
+        "corpus": _corpus_label,
+    }
+
+
+@app.post("/corpora/toggle")
+def toggle_corpus(req: ToggleCorpusRequest):
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Missing corpus name.")
+    if req.enabled:
+        _disabled_sources.discard(name)
+    else:
+        _disabled_sources.add(name)
+    return {"name": name, "enabled": name not in _disabled_sources}
+
+
+@app.post("/corpora/ingest")
+def ingest_known_corpus(req: IngestKnownRequest):
+    filename = Path(req.filename or "").name
+    if not filename:
+        raise HTTPException(status_code=400, detail="Missing filename.")
+    found = None
+    for pdf in _iter_known_pdfs():
+        if pdf.name == filename or pdf.stem == Path(filename).stem:
+            found = pdf
+            break
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"{filename} is not in the library folders.")
+    task_id = str(uuid.uuid4())
+    _tasks[task_id] = {
+        "status": "processing",
+        "filename": found.name,
+        "stats": None,
+        "error": None,
+    }
+    _executor.submit(_run_ingestion, task_id, found, found.name)
+    return {"task_id": task_id, "status": "processing", "filename": found.name}
+
+
+def _run_chat(
+    mode: str,
+    question: str,
+    history: list | None = None,
+    attachments: list | None = None,
+) -> dict:
+    from trifecta.agent import run_agent
+
+    question = (question or "").strip()
+    if not question and not attachments:
+        raise HTTPException(status_code=400, detail="Empty question.")
+    if not question:
+        question = "Please analyze the attached file(s)."
+    result = run_agent(mode or "agent", question, history or [], attachments or [])
+    return {
+        "question": question,
+        "answer_markdown": result.get("answer_markdown") or "",
+        "sources": result.get("sources") or [],
+        "visuals": result.get("visuals") or [],
+        "tools_used": result.get("tools_used") or [],
+        "used_agent": result.get("used_agent"),
+        "engine_size": _client.size if _client is not None else 0,
+        "corpus": _corpus_label,
+    }
+
+
+@app.post("/ask")
+def ask_question(req: AskRequest):
+    return _run_chat(req.mode or "study", req.question)
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    question = (req.question or "").strip()
+    history = [{"role": m.role, "content": m.content} for m in req.messages]
+    if not question:
+        for turn in reversed(history):
+            if turn["role"] == "user" and turn["content"].strip():
+                question = turn["content"].strip()
+                break
+        if history and history[-1]["role"] == "user":
+            history = history[:-1]
+    attachments = [a.model_dump() for a in req.attachments]
+    return _run_chat(req.mode or "agent", question, history, attachments)
 
 
 @app.get("/image")
 def get_image(path: str):
     image_path = Path(path)
-    if not image_path.exists():
+    if not _is_allowed_image(image_path):
         raise HTTPException(status_code=404, detail="Image not found.")
-    return FileResponse(str(image_path))
+    return FileResponse(str(image_path.resolve()))
 
 
 # ── Answer generator ─────────────────────────────────────────────────────────
@@ -675,11 +1033,42 @@ def _clean_pdf_text(text: str) -> str:
 def _is_visual_request(question: str) -> bool:
     return bool(
         re.search(
-            r"\b(diagram|figure|fig\.?|image|picture|illustration|graph|plot|chart|table|structure|draw)\b",
+            r"\b(diagram|figure|fig\.?|image|picture|illustration|graph|plot|chart|table|structure|draw|screenshot|visual|schematic)\b",
             question,
             re.I,
         )
     )
+
+
+def _visual_kind(hit: dict) -> str:
+    blob = " ".join(
+        str(hit.get(k) or "")
+        for k in ("caption", "text", "type")
+    ).lower()
+    if "table" in blob:
+        return "table"
+    if any(word in blob for word in ("graph", "plot", "curve")):
+        return "graph"
+    return "figure"
+
+
+def _visuals_payload(image_hits: list) -> list:
+    visuals = []
+    for hit in image_hits:
+        image_path = hit.get("image_path")
+        if not image_path:
+            continue
+        caption = _clean_pdf_text(hit.get("caption") or "Figure from the PDF")
+        page_ref = f"page {hit['page']}" if hit.get("page") else None
+        visuals.append({
+            "url": f"/image?path={quote(str(image_path), safe='')}",
+            "caption": caption,
+            "kind": _visual_kind(hit),
+            "page": hit.get("page"),
+            "source": hit.get("source"),
+            "label": f"{caption} — {hit.get('source') or 'PDF'}{', ' + page_ref if page_ref else ''}",
+        })
+    return visuals
 
 
 def _image_markdown(hit: dict) -> str:
@@ -867,7 +1256,7 @@ def _scan_uploaded_pdfs_for_visual_hits(question: str, limit: int = 5) -> list:
     except Exception:
         return []
 
-    for pdf_path in UPLOAD_DIR.glob("*.pdf"):
+    for pdf_path in _iter_known_pdfs():
         try:
             doc = fitz.open(str(pdf_path))
         except Exception:
@@ -937,7 +1326,7 @@ def _scan_uploaded_pdfs_for_text_hits(question: str, limit: int = 6) -> list:
     if "fixed point" in q or "fixed-point" in q:
         phrase_boosts.extend(["fixed point", "x = g(x)"])
 
-    for pdf_path in UPLOAD_DIR.glob("*.pdf"):
+    for pdf_path in _iter_known_pdfs():
         try:
             doc = fitz.open(str(pdf_path))
         except Exception:
@@ -1028,11 +1417,8 @@ def _render_pdf_page_hit(source: str, page: int, question: str = "") -> dict | N
     if not source or not page:
         return None
 
-    pdf_path = UPLOAD_DIR / f"{Path(source).stem}.pdf"
-    if not pdf_path.exists():
-        matches = list(UPLOAD_DIR.glob(f"{Path(source).stem}.*"))
-        pdf_path = matches[0] if matches else pdf_path
-    if not pdf_path.exists():
+    pdf_path = _find_pdf(str(source))
+    if pdf_path is None or not pdf_path.exists():
         return None
 
     out_path = IMAGE_DIR / f"{Path(source).stem}_p{page}_figure.png"
@@ -1449,3 +1835,9 @@ def build_answer_markdown(question: str, text_hits: list, image_hits: list) -> s
                 parts.append(f"- _{cap}_ — {hit['source']}, {page_ref}")
 
     return "\n".join(parts)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("api:app", host="127.0.0.1", port=8001, reload=False)
