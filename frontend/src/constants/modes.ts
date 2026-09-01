@@ -4,7 +4,7 @@ export const CHAT_MODES: ChatModeConfig[] = [
   {
     id: 'general',
     label: 'General Chat',
-    description: 'Open-ended conversation for any topic.',
+    description: 'Open-ended chat; can search notes or the web when needed.',
     icon: '💬',
     placeholder: 'Ask anything…',
     accent: 'from-violet-500 to-purple-600',
@@ -12,7 +12,7 @@ export const CHAT_MODES: ChatModeConfig[] = [
   {
     id: 'math',
     label: 'Math Solver',
-    description: 'Step-by-step solutions with LaTeX formulas.',
+    description: 'Step-by-step solutions; pulls textbook notes and figures when relevant.',
     icon: '∑',
     placeholder: 'Enter a math problem…',
     accent: 'from-blue-500 to-cyan-600',
@@ -28,7 +28,7 @@ export const CHAT_MODES: ChatModeConfig[] = [
   {
     id: 'study',
     label: 'Study Tutor',
-    description: 'Learn concepts with clear explanations and quizzes.',
+    description: 'Exam-style tutor that retrieves textbook text, figures, and tables.',
     icon: '📚',
     placeholder: 'What would you like to study?',
     accent: 'from-amber-500 to-orange-600',
@@ -36,7 +36,7 @@ export const CHAT_MODES: ChatModeConfig[] = [
   {
     id: 'research',
     label: 'Research Assistant',
-    description: 'Summarize papers, compare findings, cite sources.',
+    description: 'Search local PDFs and the web; cite sources.',
     icon: '🔬',
     placeholder: 'Ask a research question…',
     accent: 'from-rose-500 to-pink-600',

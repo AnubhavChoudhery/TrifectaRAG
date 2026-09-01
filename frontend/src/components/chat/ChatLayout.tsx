@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { ChatMode, MessageAttachment } from '../../types/chat'
+import type { MessageAttachment } from '../../types/chat'
 import { useConversations } from '../../hooks/useConversations'
 import { useTheme } from '../../hooks/useTheme'
 import Sidebar, { SidebarToggle } from './Sidebar'
 import ChatWindow from './ChatWindow'
+import LibraryDashboard from '../library/LibraryDashboard'
 
 export default function ChatLayout() {
   const {
@@ -11,16 +12,19 @@ export default function ChatLayout() {
     activeConversation,
     activeId,
     isLoading,
+    engineReady,
+    corpusLabel,
+    indexedChunks,
     createConversation,
     deleteConversation,
     selectConversation,
-    setMode,
     sendMessage,
     uploadDocument,
   } = useConversations()
 
   const { isDark, toggleTheme } = useTheme()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [view, setView] = useState<'chat' | 'library'>('chat')
 
   useEffect(() => {
     if (conversations.length === 0) {
@@ -28,22 +32,12 @@ export default function ChatLayout() {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSelectMode = (mode: ChatMode) => {
+  const handleSend = (message: string, attachments?: MessageAttachment[], files?: File[]) => {
     if (!activeId) return
-    setMode(activeId, mode)
+    sendMessage(activeId, message, attachments, files)
   }
 
-  const handleChangeMode = (mode: ChatMode) => {
-    if (!activeId) return
-    setMode(activeId, mode)
-  }
-
-  const handleSend = (message: string, attachments?: MessageAttachment[]) => {
-    if (!activeId) return
-    sendMessage(activeId, message, attachments)
-  }
-
-  const handleUploadPdf = (file: File) => {
+  const handleIndex = (file: File) => {
     if (!activeId) return
     uploadDocument(activeId, file)
   }
@@ -56,10 +50,17 @@ export default function ChatLayout() {
         isDark={isDark}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        onNewChat={createConversation}
-        onSelect={selectConversation}
+        onNewChat={() => {
+          createConversation()
+          setView('chat')
+        }}
+        onSelect={(id) => {
+          selectConversation(id)
+          setView('chat')
+        }}
         onDelete={deleteConversation}
         onToggleTheme={toggleTheme}
+        onOpenLibrary={() => setView('library')}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
@@ -68,14 +69,19 @@ export default function ChatLayout() {
           <span className="text-sm font-medium">Trifecta Tutor</span>
         </div>
 
-        <ChatWindow
-          conversation={activeConversation}
-          isLoading={isLoading}
-          onSelectMode={handleSelectMode}
-          onChangeMode={handleChangeMode}
-          onSend={handleSend}
-          onUploadPdf={handleUploadPdf}
-        />
+        {view === 'library' ? (
+          <LibraryDashboard onBack={() => setView('chat')} />
+        ) : (
+          <ChatWindow
+            conversation={activeConversation}
+            isLoading={isLoading}
+            onSend={handleSend}
+            onIndexDocument={handleIndex}
+            engineReady={engineReady}
+            corpusLabel={corpusLabel}
+            indexedChunks={indexedChunks}
+          />
+        )}
       </main>
     </div>
   )

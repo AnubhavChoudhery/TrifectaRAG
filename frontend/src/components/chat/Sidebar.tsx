@@ -1,6 +1,5 @@
-import { Menu, MessageSquarePlus, Moon, Sun, Trash2, X } from 'lucide-react'
+import { BookOpen, Menu, MessageSquarePlus, Moon, Sun, Trash2, X } from 'lucide-react'
 import type { Conversation } from '../../types/chat'
-import { getModeConfig } from '../../constants/modes'
 
 type SidebarProps = {
   conversations: Conversation[]
@@ -12,6 +11,7 @@ type SidebarProps = {
   onSelect: (id: string) => void
   onDelete: (id: string) => void
   onToggleTheme: () => void
+  onOpenLibrary: () => void
 }
 
 function formatDate(ts: number) {
@@ -37,6 +37,7 @@ export default function Sidebar({
   onSelect,
   onDelete,
   onToggleTheme,
+  onOpenLibrary,
 }: SidebarProps) {
   return (
     <>
@@ -81,17 +82,27 @@ export default function Sidebar({
             <MessageSquarePlus size={18} />
             New conversation
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              onOpenLibrary()
+              onClose()
+            }}
+            className="mt-2 flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-chat-fg transition hover:bg-chat-muted"
+          >
+            <BookOpen size={18} />
+            Library
+          </button>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 pb-2" aria-label="Conversations">
           {conversations.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs leading-5 text-chat-muted-fg">
-              No conversations yet. Start a new chat to pick a mode.
+              No conversations yet. Start a new chat.
             </p>
           ) : (
             <ul className="space-y-0.5">
               {conversations.map((conv) => {
-                const modeLabel = conv.mode ? getModeConfig(conv.mode).label : 'Choose mode'
                 const isActive = conv.id === activeId
                 return (
                   <li key={conv.id} className="group relative">
@@ -109,7 +120,7 @@ export default function Sidebar({
                     >
                       <span className="truncate text-sm font-medium">{conv.title}</span>
                       <span className="mt-0.5 truncate text-[11px] text-chat-muted-fg">
-                        {modeLabel} · {formatDate(conv.updatedAt)}
+                        {formatDate(conv.updatedAt)}
                       </span>
                     </button>
                     <button

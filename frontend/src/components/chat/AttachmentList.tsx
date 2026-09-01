@@ -22,14 +22,14 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
             />
           )
         }
-        if (att.type === 'pdf') {
+        if (att.type === 'pdf' || att.type === 'docx' || att.type === 'file') {
           return (
             <div
               key={i}
               className="flex items-center gap-2 self-start rounded-xl border border-chat-border bg-chat-muted/30 px-3 py-2 text-sm text-chat-fg"
             >
               <FileText size={16} className="shrink-0 text-chat-accent" />
-              <span className="max-w-[240px] truncate">{att.name ?? 'document.pdf'}</span>
+              <span className="max-w-[240px] truncate">{att.name ?? 'document'}</span>
             </div>
           )
         }

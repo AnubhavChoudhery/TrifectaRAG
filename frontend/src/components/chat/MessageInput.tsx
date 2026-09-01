@@ -1,13 +1,11 @@
 import { FileUp, ImagePlus, Paperclip, Send, Table2 } from 'lucide-react'
 import { useCallback, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react'
-import type { ChatMode, MessageAttachment } from '../../types/chat'
-import { getModeConfig } from '../../constants/modes'
+import type { MessageAttachment } from '../../types/chat'
 
 type MessageInputProps = {
-  mode: ChatMode
   disabled?: boolean
-  onSend: (message: string, attachments?: MessageAttachment[]) => void
-  onUploadPdf?: (file: File) => void
+  onSend: (message: string, attachments?: MessageAttachment[], files?: File[]) => void
+  onIndexDocument?: (file: File) => void
 }
 
 function looksLikeMarkdownTable(text: string): boolean {
@@ -16,13 +14,13 @@ function looksLikeMarkdownTable(text: string): boolean {
   return lines.every((line) => line.includes('|'))
 }
 
-export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: MessageInputProps) {
+export default function MessageInput({ disabled, onSend, onIndexDocument }: MessageInputProps) {
   const [value, setValue] = useState('')
   const [attachments, setAttachments] = useState<MessageAttachment[]>([])
+  const pendingFiles = useRef<File[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const pdfRef = useRef<HTMLInputElement>(null)
-  const placeholder = getModeConfig(mode).placeholder
+  const indexRef = useRef<HTMLInputElement>(null)
 
   const resize = useCallback(() => {
     const el = textareaRef.current
@@ -33,7 +31,9 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
 
   const handleSend = () => {
     const trimmed = value.trim()
-    if (!trimmed || disabled) return
+    const files = pendingFiles.current
+    if (disabled) return
+    if (!trimmed && files.length === 0 && attachments.length === 0) return
 
     let finalAttachments = attachments
     if (looksLikeMarkdownTable(trimmed) && !attachments.some((a) => a.type === 'table')) {
@@ -43,9 +43,14 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
       ]
     }
 
-    onSend(trimmed, finalAttachments.length ? finalAttachments : undefined)
+    onSend(
+      trimmed || (files.length ? 'Please analyze the attached file(s).' : ''),
+      finalAttachments.length ? finalAttachments : undefined,
+      files.length ? files : undefined,
+    )
     setValue('')
     setAttachments([])
+    pendingFiles.current = []
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -58,21 +63,33 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
     }
   }
 
-  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file?.type.startsWith('image/')) return
+  const addFiles = (list: FileList | File[]) => {
+    const next: MessageAttachment[] = []
+    for (const file of Array.from(list)) {
+      pendingFiles.current = [...pendingFiles.current, file]
+      const lower = file.name.toLowerCase()
+      if (file.type.startsWith('image/')) {
+        next.push({ type: 'image', url: URL.createObjectURL(file), name: file.name })
+      } else if (lower.endsWith('.pdf')) {
+        next.push({ type: 'pdf', name: file.name })
+      } else if (lower.endsWith('.docx')) {
+        next.push({ type: 'docx', name: file.name })
+      } else {
+        next.push({ type: 'file', name: file.name })
+      }
+    }
+    setAttachments((prev) => [...prev, ...next])
+  }
 
-    const url = URL.createObjectURL(file)
-    setAttachments((prev) => [...prev, { type: 'image', url, name: file.name }])
+  const handleAttach = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) addFiles(e.target.files)
     e.target.value = ''
   }
 
-  const handlePdfUpload = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleIndex = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file && file.name.toLowerCase().endsWith('.pdf')) {
-      onUploadPdf?.(file)
-    }
     e.target.value = ''
+    if (file) onIndexDocument?.(file)
   }
 
   const removeAttachment = (index: number) => {
@@ -81,9 +98,12 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
       if (att?.type === 'image' && att.url?.startsWith('blob:')) {
         URL.revokeObjectURL(att.url)
       }
+      pendingFiles.current = pendingFiles.current.filter((_, i) => i !== index)
       return prev.filter((_, i) => i !== index)
     })
   }
+
+  const canSend = Boolean(value.trim() || pendingFiles.current.length || attachments.length)
 
   return (
     <div className="border-t border-chat-border bg-chat-surface px-4 py-4 md:px-8">
@@ -91,7 +111,7 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
         <div className="mb-3 flex flex-wrap gap-2">
           {attachments.map((att, i) => (
             <div
-              key={i}
+              key={`${att.name}-${i}`}
               className="relative flex items-center gap-2 rounded-lg border border-chat-border bg-chat-muted/40 px-2 py-1.5 text-xs"
             >
               {att.type === 'image' && att.url ? (
@@ -117,26 +137,27 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          accept="image/*,.pdf,.docx,.txt,.md,.csv,application/pdf"
+          multiple
           className="hidden"
-          onChange={handleImageUpload}
+          onChange={handleAttach}
         />
         <input
-          ref={pdfRef}
+          ref={indexRef}
           type="file"
-          accept="application/pdf,.pdf"
+          accept=".pdf,.docx,.txt,.md,.csv,application/pdf"
           className="hidden"
-          onChange={handlePdfUpload}
+          onChange={handleIndex}
         />
 
-        {onUploadPdf && (
+        {onIndexDocument && (
           <button
             type="button"
-            onClick={() => pdfRef.current?.click()}
+            onClick={() => indexRef.current?.click()}
             disabled={disabled}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-chat-muted-fg transition hover:bg-chat-muted hover:text-chat-fg disabled:opacity-40"
-            aria-label="Upload PDF"
-            title="Upload a PDF to index"
+            aria-label="Index a document into the library"
+            title="Index a PDF or DOCX into the RAG library"
           >
             <FileUp size={18} />
           </button>
@@ -147,7 +168,8 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
           onClick={() => fileRef.current?.click()}
           disabled={disabled}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-chat-muted-fg transition hover:bg-chat-muted hover:text-chat-fg disabled:opacity-40"
-          aria-label="Upload image"
+          aria-label="Attach file"
+          title="Attach image, PDF, or DOCX for this question"
         >
           <ImagePlus size={18} />
         </button>
@@ -160,7 +182,7 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
             resize()
           }}
           onKeyDown={handleKeyDown}
-          placeholder={placeholder}
+          placeholder="Ask anything — attach a worksheet or notes if you have them…"
           disabled={disabled}
           rows={1}
           className="max-h-[200px] min-h-[44px] flex-1 resize-none bg-transparent px-1 py-2.5 text-[15px] leading-6 text-chat-fg outline-none placeholder:text-chat-muted-fg disabled:opacity-50"
@@ -169,7 +191,7 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
         <button
           type="button"
           onClick={handleSend}
-          disabled={disabled || !value.trim()}
+          disabled={disabled || !canSend}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-chat-accent text-white transition hover:bg-chat-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           aria-label="Send message"
         >
@@ -179,7 +201,7 @@ export default function MessageInput({ mode, disabled, onSend, onUploadPdf }: Me
 
       <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-chat-muted-fg">
         <Paperclip size={10} className="mr-1 inline" />
-        Shift+Enter for new line · Upload a PDF to index · Attach images
+        Shift+Enter for a new line · Attach for this turn · File-up indexes a RAG source
       </p>
     </div>
   )
