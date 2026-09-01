@@ -1,10 +1,9 @@
-export type ChatMode = 'general' | 'math' | 'code' | 'study' | 'research'
+export type ChatMode = 'agent' | 'general' | 'math' | 'code' | 'study' | 'research'
 
 export type MessageAttachment = {
-  type: 'image' | 'table' | 'pdf'
+  type: 'image' | 'table' | 'pdf' | 'docx' | 'file'
   url?: string
   name?: string
-  /** Raw markdown table or tabular text */
   data?: string
 }
 
@@ -14,19 +13,32 @@ export type ImagePreview = {
   alt?: string
 }
 
+export type Citation = {
+  global_id?: number
+  score?: number
+  modality?: string
+  source?: string
+  page?: number
+  text_preview?: string
+  image_path?: string
+  retrieval?: string
+}
+
 export type Message = {
   id: string
   role: 'user' | 'assistant'
   content: string
   attachments?: MessageAttachment[]
   imagePreview?: ImagePreview
+  toolsUsed?: string[]
+  sources?: Citation[]
   timestamp: number
 }
 
 export type Conversation = {
   id: string
   title: string
-  mode: ChatMode | null
+  mode?: ChatMode | null
   messages: Message[]
   documentName?: string
   documentIndexed?: boolean
@@ -45,7 +57,7 @@ export type ChatModeConfig = {
 
 export type SendMessagePayload = {
   conversationId: string
-  mode: ChatMode
+  mode?: ChatMode
   message: string
   attachments?: MessageAttachment[]
 }
@@ -53,4 +65,14 @@ export type SendMessagePayload = {
 export type ChatApiResponse = {
   content: string
   imagePreview?: ImagePreview
+}
+
+export type CorpusItem = {
+  name: string
+  kind: 'source' | 'pdf' | string
+  indexed: boolean
+  enabled: boolean
+  pages?: number | null
+  chunks: number
+  filename?: string | null
 }

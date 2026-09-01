@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ChatMode, Conversation, Message, MessageAttachment } from '../types/chat'
-import { askQuestion, getIngestStatus, uploadPdf } from '../services/api'
+import type { Citation, Conversation, Message, MessageAttachment } from '../types/chat'
+import {
+  attachFile,
+  checkApiHealth,
+  getIngestStatus,
+  sendAgentChat,
+  uploadDocumentFile,
+  type VisualHit,
+} from '../services/api'
 import { sendChatMessage } from '../services/chatApi'
 
 const STORAGE_KEY = 'trifecta-chat-conversations'
@@ -11,19 +18,46 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function hasMarkdownImages(content: string): boolean {
+  return /!\[[^\]]*]\(\/image\?path=/.test(content)
+}
+
 /** Build the assistant reply from a backend /ask response. */
-function buildAssistantMessage(content: string, sources: { modality?: string; image_path?: string; page?: number; source?: string }[]): Message {
-  const firstImage = sources.find((s) => s.modality === 'IMAGE' && s.image_path)
+function buildAssistantMessage(
+  content: string,
+  sources: Citation[] = [],
+  visuals: VisualHit[] = [],
+  toolsUsed?: string[],
+): Message {
+  const attachments: MessageAttachment[] = []
+  if (!hasMarkdownImages(content)) {
+    for (const visual of visuals) {
+      if (!visual.url) continue
+      attachments.push({
+        type: 'image',
+        url: visual.url,
+        name: visual.label ?? visual.caption ?? visual.kind ?? 'figure',
+      })
+    }
+    if (!attachments.length) {
+      for (const source of sources) {
+        if (source.modality !== 'IMAGE' || !source.image_path) continue
+        attachments.push({
+          type: 'image',
+          url: `/image?path=${encodeURIComponent(source.image_path)}`,
+          name: `${source.source ?? 'Figure'}${source.page ? ` — page ${source.page}` : ''}`,
+        })
+      }
+    }
+  }
+
   return {
     id: uid(),
     role: 'assistant',
     content,
-    imagePreview: firstImage
-      ? {
-          url: `/image?path=${encodeURIComponent(firstImage.image_path as string)}`,
-          caption: `${firstImage.source ?? 'Figure'}${firstImage.page ? ` — page ${firstImage.page}` : ''}`,
-        }
-      : undefined,
+    attachments: attachments.length ? attachments : undefined,
+    toolsUsed: toolsUsed?.length ? toolsUsed : undefined,
+    sources: sources.length ? sources : undefined,
     timestamp: Date.now(),
   }
 }
@@ -54,28 +88,44 @@ function saveConversations(conversations: Conversation[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations))
 }
 
-function shouldUseDocumentRetrieval(message: string): boolean {
-  return /\b(pdf|document|uploaded|textbook|source|page|cite|citation|according to|from the file|from the notes)\b/i.test(
-    message,
-  )
-}
-
-function shouldQueryBackend(mode: ChatMode, hasIndexedDocument: boolean, message: string): boolean {
-  if (!hasIndexedDocument) return false
-  if (mode === 'study') return true
-  if (mode === 'research') return true
-  if (mode === 'general') return shouldUseDocumentRetrieval(message)
-  return false
+function shouldUseAgent(backendUp: boolean): boolean {
+  return backendUp
 }
 
 export function useConversations() {
   const [conversations, setConversations] = useState<Conversation[]>(loadConversations)
   const [activeId, setActiveId] = useState<string | null>(() => conversations[0]?.id ?? null)
   const [isLoading, setIsLoading] = useState(false)
+  const [engineReady, setEngineReady] = useState(false)
+  const [backendUp, setBackendUp] = useState(false)
+  const [corpusLabel, setCorpusLabel] = useState<string | null>(null)
+  const [indexedChunks, setIndexedChunks] = useState(0)
 
   useEffect(() => {
     saveConversations(conversations)
   }, [conversations])
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      const health = await checkApiHealth()
+      if (cancelled) return
+      if (!health) {
+        setBackendUp(false)
+        return
+      }
+      setBackendUp(true)
+      setEngineReady(health.indexed_chunks > 0)
+      setIndexedChunks(health.indexed_chunks)
+      setCorpusLabel(health.corpus && health.corpus !== 'empty' ? health.corpus : null)
+    }
+    void refresh()
+    const timer = window.setInterval(refresh, 8000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null
 
@@ -89,7 +139,7 @@ export function useConversations() {
     const conv: Conversation = {
       id: uid(),
       title: 'New conversation',
-      mode: null,
+      mode: 'agent',
       messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -116,17 +166,15 @@ export function useConversations() {
     setActiveId(id)
   }, [])
 
-  const setMode = useCallback(
-    (id: string, mode: ChatMode) => {
-      updateConversation(id, { mode })
-    },
-    [updateConversation],
-  )
-
   const sendMessage = useCallback(
-    async (conversationId: string, content: string, attachments?: MessageAttachment[]) => {
+    async (
+      conversationId: string,
+      content: string,
+      attachments?: MessageAttachment[],
+      files?: File[],
+    ) => {
       const conv = conversations.find((c) => c.id === conversationId)
-      if (!conv?.mode || !content.trim()) return
+      if (!conv || (!content.trim() && !files?.length && !attachments?.length)) return
 
       const userMsg: Message = {
         id: uid(),
@@ -145,35 +193,36 @@ export function useConversations() {
       setIsLoading(true)
       try {
         let assistantMsg: Message
-        const useBackend = shouldQueryBackend(conv.mode, Boolean(conv.documentIndexed), content)
+        const useBackend = shouldUseAgent(backendUp)
 
         if (useBackend) {
           try {
-            const response = await askQuestion(content.trim())
-            assistantMsg = buildAssistantMessage(response.answer_markdown, response.sources ?? [])
+            const parsed = []
+            for (const file of files ?? []) {
+              parsed.push(await attachFile(file))
+            }
+            const history = withUser
+              .filter((m) => m.role === 'user' || m.role === 'assistant')
+              .map((m) => ({ role: m.role, content: m.content }))
+            const response = await sendAgentChat('agent', history, content.trim(), parsed)
+            assistantMsg = buildAssistantMessage(
+              response.answer_markdown,
+              response.sources ?? [],
+              response.visuals ?? [],
+              response.tools_used,
+            )
           } catch (err) {
-            if (conv.mode === 'study') {
-              assistantMsg = {
-                id: uid(),
-                role: 'assistant',
-                content: `I could not answer from the PDF right now. ${
-                  err instanceof Error ? err.message : 'The document backend was not available.'
-                }\n\nPlease make sure the backend is running on port 8000, then upload the PDF again in this conversation and wait until it says **PDF ready**.`,
-                timestamp: Date.now(),
-              }
-            } else {
-            const response = await sendChatMessage(conv.mode, content.trim(), attachments)
             assistantMsg = {
               id: uid(),
               role: 'assistant',
-              content: response.content,
-              imagePreview: response.imagePreview,
+              content: `I could not finish that request. ${
+                err instanceof Error ? err.message : 'The backend was not available.'
+              }\n\nKeep \`python api.py\` running on port 8001, and make sure Ollama is running (\`ollama serve\`).`,
               timestamp: Date.now(),
-            }
             }
           }
         } else {
-          const response = await sendChatMessage(conv.mode, content.trim(), attachments)
+          const response = await sendChatMessage('general', content.trim(), attachments)
           assistantMsg = {
             id: uid(),
             role: 'assistant',
@@ -199,7 +248,7 @@ export function useConversations() {
         setIsLoading(false)
       }
     },
-    [conversations, updateConversation],
+    [conversations, backendUp, updateConversation],
   )
 
   const uploadDocument = useCallback(
@@ -245,7 +294,7 @@ export function useConversations() {
 
       setIsLoading(true)
       try {
-        const { task_id } = await uploadPdf(file)
+        const { task_id } = await uploadDocumentFile(file)
         const deadline = Date.now() + POLL_TIMEOUT_MS
 
         while (Date.now() < deadline) {
@@ -257,11 +306,14 @@ export function useConversations() {
             const detail = s
               ? ` (${s.pages} pages · ${s.text_chunks} text chunks · ${s.images} images)`
               : ''
-            patchStatus(`✅ Indexed **${file.name}**${detail}. Ask me anything about it.`)
+            patchStatus(`✅ Indexed **${file.name}**${detail}. Ask me anything about it — I can pull text, tables, graphs, and figures.`)
             updateConversation(conversationId, {
               documentName: file.name,
               documentIndexed: true,
             })
+            setEngineReady(true)
+            setCorpusLabel(file.name.replace(/\.pdf$/i, ''))
+            if (s?.text_chunks) setIndexedChunks((s.text_chunks ?? 0) + (s.images ?? 0))
             return
           }
           if (status.status === 'error') {
@@ -289,10 +341,12 @@ export function useConversations() {
     activeConversation,
     activeId,
     isLoading,
+    engineReady,
+    corpusLabel,
+    indexedChunks,
     createConversation,
     deleteConversation,
     selectConversation,
-    setMode,
     sendMessage,
     uploadDocument,
   }
