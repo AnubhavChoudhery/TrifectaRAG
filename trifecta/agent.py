@@ -170,7 +170,8 @@ Exam / homework workflow:
 1. search_corpus with the method name (e.g. "Lagrange interpolation").
 2. search_visuals only if a figure or table would clarify the construction.
 3. SOLVE the student's problem. Cite source + page for retrieved claims.
-4. Markdown only. LaTeX MUST use $inline$ and $$display$$. Never write \\( \\), \\[ \\], or [equation] brackets.
+4. Markdown only. LaTeX MUST use $inline$ and $$display$$. Never write \\( \\), \\[ \\], $$$, or [equation] brackets.
+   Do not paste raw PDF excerpts. Paraphrase; mashed words like "definedbythe" mean the extract lost spaces — rewrite them.
 
 If the library has nothing relevant, say so and solve from first principles or the web."""
 
@@ -441,6 +442,8 @@ def _finalize_answer(answer: str, visuals: list) -> str:
     import api as api_mod
 
     answer = answer or ""
+    answer = re.sub(r"\\\$", "$", answer)
+    answer = re.sub(r"\${3,}", "$$", answer)
     answer = re.sub(r"\]\(https?://image\?path=", "](/image?path=", answer)
 
     def _encode_path(match: re.Match) -> str:

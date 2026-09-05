@@ -50,6 +50,10 @@
     background-color: color-mix(in srgb, var(--chat-muted) 50%, transparent);
   }
 
+  .prose-chat .katex-error {
+    color: inherit !important;
+  }
+
   .typing-dot {
     @apply h-2 w-2 rounded-full;
     background-color: color-mix(in srgb, var(--chat-muted-fg) 60%, transparent);

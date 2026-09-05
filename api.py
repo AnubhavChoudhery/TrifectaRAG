@@ -1082,7 +1082,26 @@ def _clean_pdf_text(text: str) -> str:
     lines = [clean_line(line) for line in text.splitlines()]
     text = "\n".join(line for line in lines if line)
     text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _unglue_pdf_words(text)
     return text.strip()
+
+
+_GLUED_WORDS = (
+    "defined", "because", "therefore", "provided", "interval", "iteration",
+    "iterations", "relaxation", "sequence", "converges", "converge",
+    "starting", "initial", "theorem", "lemma", "where", "when", "which",
+    "that", "this", "with", "from", "into", "then", "than", "and", "the",
+    "for", "not",
+)
+
+
+def _unglue_pdf_words(text: str) -> str:
+    text = re.sub(r"([)\],.:;])([A-Za-z\\])", r"\1 \2", text)
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    for word in _GLUED_WORDS:
+        text = re.sub(rf"([A-Za-z0-9)\]])({word})(?=[A-Za-z(\\\$]|$)", r"\1 \2", text, flags=re.I)
+        text = re.sub(rf"({word})([A-Za-z(\\\$])", r"\1 \2", text, flags=re.I)
+    return re.sub(r"[ \t]{2,}", " ", text)
 
 
 def _is_visual_request(question: str) -> bool:
