@@ -1,0 +1,126 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.10",
+    "pybind11>=2.13",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "trifectarag"
+version = "0.1.0"
+description = "Multi-modal RAG engine: HNSW + BM25 + knowledge graph, fused with RRF."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [
+    { name = "JBAC EdTech" },
+]
+keywords = [
+    "rag",
+    "retrieval",
+    "hnsw",
+    "bm25",
+    "knowledge-graph",
+    "multimodal",
+    "pdf",
+    "clip",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "Pillow>=9.0.0",
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "sentence-transformers>=2.2.0",
+]
+pdf = [
+    "pymupdf>=1.24.0",
+]
+mcp = [
+    "mcp>=1.0.0",
+]
+agent = [
+    "ollama>=0.3.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "build>=1.2.0",
+    "twine>=5.0.0",
+]
+all = [
+    "trifectarag[ml,pdf,mcp,agent]",
+]
+
+[project.urls]
+Homepage = "https://github.com/AnubhavChoudhery/TrifectaRAG"
+Repository = "https://github.com/AnubhavChoudhery/TrifectaRAG"
+Issues = "https://github.com/AnubhavChoudhery/TrifectaRAG/issues"
+
+[project.scripts]
+trifecta = "trifecta.cli:main"
+trifectarag = "trifecta.cli:main"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.16"
+cmake.build-type = "Release"
+wheel.packages = ["trifecta"]
+sdist.cmake = false
+sdist.include = [
+    "src/*.cpp",
+    "src/*.hpp",
+    "CMakeLists.txt",
+    "LICENSE",
+    "README.md",
+]
+sdist.exclude = [
+    "frontend",
+    "frontend/**",
+    "build",
+    "build/**",
+    "dist",
+    "dist/**",
+    "wheelhouse",
+    "examples/data",
+    "uploaded_pdfs",
+    "extracted_images",
+    "backend",
+    ".matplotlib",
+    "*.pyd",
+    "*.so",
+    "*.dll",
+    "__pycache__",
+    "*.egg-info",
+]
+
+[tool.scikit-build.cmake.define]
+TRIFECTA_BUILD_TESTS = "OFF"
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-* cp313-*"
+skip = "pp* *-musllinux_* *-win32 *_i686"
+test-command = "python -c \"import trifecta; print(trifecta.__version__)\""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"

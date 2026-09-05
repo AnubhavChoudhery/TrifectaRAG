@@ -1,5 +1,5 @@
-"""Allow running as `python -m trifecta` — launches the MCP server."""
+"""Allow ``python -m trifecta`` to launch the CLI."""
 
-from trifecta.mcp_server import main
+from trifecta.cli import main
 
-main()
+raise SystemExit(main())

@@ -181,6 +181,14 @@ def trifecta_stats() -> str:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
+def run_server(client: Any) -> None:
+    """Serve MCP tools against an already-constructed TrifectaClient."""
+    global _client
+    _client = client
+    logger.info("TrifectaClient ready for MCP: %s", client)
+    mcp.run()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="TrifectaRAG MCP Server")
     parser.add_argument(
@@ -201,18 +209,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global _client
     from .client import TrifectaClient
-    _client = TrifectaClient(device=args.device)
-    logger.info("TrifectaClient initialised: %s", _client)
+    client = TrifectaClient(device=args.device)
+    logger.info("TrifectaClient initialised: %s", client)
 
     if args.ingest:
         from .pdf_ingest import PDFIngestor
-        ingestor = PDFIngestor(_client, mode=args.mode)
+        ingestor = PDFIngestor(client, mode=args.mode)
         stats = ingestor.ingest_pdf(args.ingest, output_dir=args.output_dir)
         logger.info("Pre-ingested PDF: %s", stats)
 
-    mcp.run()
+    run_server(client)
 
 
 if __name__ == "__main__":

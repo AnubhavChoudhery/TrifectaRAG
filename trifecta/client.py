@@ -26,8 +26,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import torch
 from PIL import Image
+
+try:
+    import torch
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore[assignment]
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -113,14 +117,19 @@ class TrifectaClient:
         ef_construction: int = 200,
         max_elements: int = 1_000_000,
     ) -> None:
-        self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if device:
+            self._device = device
+        elif torch is not None and torch.cuda.is_available():
+            self._device = "cuda"
+        else:
+            self._device = "cpu"
         logger.info("TrifectaClient: device=%s", self._device)
         self._clip_model = None
         self._clip_processor = None
         self._using_fallback_embeddings = True
         self._dim = _FALLBACK_DIM
 
-        if CLIPModel is not None and CLIPProcessor is not None:
+        if torch is not None and CLIPModel is not None and CLIPProcessor is not None:
             try:
                 self._clip_model = CLIPModel.from_pretrained(
                     clip_model,
@@ -132,7 +141,8 @@ class TrifectaClient:
                     clip_model,
                     local_files_only=True,
                 )
-                self._dim = int(getattr(self._clip_model.config, "projection_dim", _FALLBACK_DIM))
+                proj = getattr(getattr(self._clip_model, "config", None), "projection_dim", None)
+                self._dim = int(proj) if isinstance(proj, (int, float)) and int(proj) > 0 else _FALLBACK_DIM
                 self._using_fallback_embeddings = False
                 logger.info("CLIP model '%s' loaded locally, dim=%d", clip_model, self._dim)
             except Exception as exc:

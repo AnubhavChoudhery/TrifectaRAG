@@ -166,6 +166,9 @@ def _install_clip_mocks(MockST, MockCLIP, MockProc):
     MockST.return_value = mock_st_inst
 
     mock_clip_inst = MagicMock()
+    mock_clip_inst.to.return_value = mock_clip_inst
+    mock_clip_inst.eval.return_value = mock_clip_inst
+    mock_clip_inst.config.projection_dim = _MOCK_DIM
     mock_clip_inst.visual_projection.return_value = MagicMock(
         cpu=lambda: MagicMock(
             numpy=lambda: np.random.randn(1, _MOCK_DIM).astype(np.float32)

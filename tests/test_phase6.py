@@ -194,6 +194,7 @@ def _make_client():
         MockCLIP.from_pretrained.return_value = mock_clip
         mock_clip.to.return_value = mock_clip
         mock_clip.eval.return_value = mock_clip
+        mock_clip.config.projection_dim = DIM
 
         _img_counter = [0]
 

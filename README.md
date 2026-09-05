@@ -1,27 +1,184 @@
 # TrifectaRAG
 
-Local multi-modal RAG: **HNSW** (vectors) + **BM25** (keywords) + a **knowledge graph**, fused with RRF and reranked with MMR. Use it from the **browser tutor** or from the **Python SDK**.
+Local multi-modal RAG: **HNSW** (vectors) + **BM25** (keywords) + a **knowledge graph**, fused with Reciprocal Rank Fusion and optionally reranked with MMR.
 
-The browser agent decides when to search your indexed library, pull a figure, or look on the web. Answers that used the library include source, page, and chunk id.
+Install the Python SDK and CLI from PyPI, or run the optional browser tutor from this repo.
+
+```bash
+pip install trifectarag[pdf]
+```
+
+```python
+from trifecta import TrifectaClient, PDFIngestor
+
+client = TrifectaClient(device="cpu")
+PDFIngestor(client, mode="page").ingest_pdf("textbook.pdf", output_dir="extracted")
+client.save_snapshot("my.index")
+
+hits = client.get_results(client.query("Newton's method", top_k=5))
+for row in hits:
+    print(row["global_id"], row["score"], row["metadata"].get("page"))
+```
+
+```bash
+trifecta ingest textbook.pdf --index ./my.index
+trifecta query "Newton's method" --index ./my.index --top-k 5
+trifecta info --index ./my.index
+```
 
 ---
 
-## What you need
+## Install
+
+Requires Python 3.10+ and a C++17 toolchain only when building from source. PyPI wheels ship the compiled `trifecta_py` extension.
+
+| Extra | What it adds |
+|---|---|
+| *(none)* | Core SDK + CLI (hash embeddings, no PyTorch) |
+| `[pdf]` | PyMuPDF ingestion + vector-figure extraction |
+| `[ml]` | CLIP embeddings via `torch` / `transformers` |
+| `[mcp]` | Model Context Protocol server |
+| `[agent]` | Ollama tutor agent helpers |
+| `[all]` | Everything above |
+
+```bash
+pip install trifectarag          # library + CLI
+pip install trifectarag[pdf]     # + PDF ingestion
+pip install trifectarag[all]     # + CLIP, MCP, agent
+```
+
+From a clone of this repository:
+
+```bash
+pip install -e ".[pdf,ml]"
+```
+
+Default index path is `./trifecta.index` (or `$TRIFECTA_INDEX`). Snapshots are two files: `<stem>.trifecta` (C++ engine) and `<stem>.meta.gz` (Python metadata).
+
+---
+
+## Python SDK
+
+```python
+from trifecta import TrifectaClient, PDFIngestor
+from trifecta import trifecta_py as tr
+
+client = TrifectaClient(device="cpu")
+
+gid = client.add_document(
+    "Lagrange interpolation uses basis polynomials L_i(x).",
+    metadata={"source": "notes", "page": 1},
+)
+client.add_image("figure.png", caption="Bisection interval", metadata={"source": "notes", "page": 2})
+client.add_edge(gid, other_gid, tr.EdgeType.RELATES_TO)  # or EXPLAINS / DEPICTS
+
+# PDF: page mode = one chunk per page + cropped figures. HNSW + BM25 are filled together.
+stats = PDFIngestor(client, mode="page").ingest_pdf("textbook.pdf", output_dir="extracted")
+print(stats)  # pages, text_chunks, images, kg_edges
+
+client.save_snapshot("my.index")
+client = TrifectaClient.from_snapshot("my.index", device="cpu")
+```
+
+`mode="classical"` uses overlapping word chunks instead of one page per node.
+
+### Query
+
+```python
+hits = client.query(text="Lagrange interpolation", top_k=8)
+for row in client.get_results(hits):
+    meta = row["metadata"]
+    print(row["global_id"], row["score"], meta.get("source"), meta.get("page"))
+
+# Keyword only / vector only
+client.query(text="bisection", top_k=5, use_hnsw=False, use_bm25=True)
+client.query(text="bisection", top_k=5, use_hnsw=True, use_bm25=False)
+
+# Image + text late fusion (CLIP, or hash embeddings if [ml] is not installed)
+client.query(text="root finding figure", image="scan.png", top_k=5)
+```
+
+### Page index
+
+```python
+client.list_sources()
+client.list_pages("Numerical_Analysis")
+client.get_page_chunks("Numerical_Analysis", 36)
+client.get_chunk_page(209)  # -> ("Numerical_Analysis", 213)
+```
+
+### Hybrid search the tutor uses (MMR + provenance)
+
+```python
+from trifecta import hybrid_search, serialize_sources
+
+hits = hybrid_search(client, "Lagrange interpolation", top_k=4)
+print(serialize_sources(hits))
+```
+
+---
+
+## CLI
+
+```text
+trifecta ingest FILE.pdf [FILE.pdf ...] [--mode page|classical] [--pages START:END]
+trifecta query TEXT [--image FILE] [--top-k N] [--no-hnsw] [--no-bm25]
+trifecta add-text TEXT [--source NAME] [--page N]
+trifecta add-image FILE [--caption TEXT]
+trifecta info | sources | pages [--source NAME] [--page N]
+trifecta get GID
+trifecta mcp [--ingest FILE.pdf]
+```
+
+Shared flags: `--index PATH`, `--device cpu|cuda`, `--json`.
+
+```bash
+trifecta ingest examples/data/Numerical_Analysis.pdf --index ./na.index --pages 11:444
+trifecta query "trapezoidal rule" --index ./na.index --json
+python -m trifecta info --index ./na.index
+```
+
+---
+
+## How retrieval works
+
+On ingest, **HNSW and BM25 are always built together**. At query time:
+
+1. Optional HNSW (vector / embedding search)
+2. Optional BM25 (lexical search)
+3. Knowledge-graph 1-hop expansion from those seeds
+4. Reciprocal rank fusion, then optional MMR so near-duplicate pages are dropped
+
+Each hit carries `source`, `page`, `global_id`, and RRF `score`.
+
+---
+
+## Browser tutor (this repo)
+
+The optional UI is **not** on PyPI. From a clone:
 
 - Python 3.11+
-- Node 18+ (UI only)
+- Node 18+
 - [Ollama](https://ollama.com) with a tool-capable model (default `qwen2.5:7b`)
 
 ```powershell
+pip install -e ".[all]"
 pip install -r requirements.txt
 ollama pull qwen2.5:7b
 cd frontend
 npm install
 ```
 
-Build the C++ engine once if `import trifecta` fails (from the repo root, with your usual pybind11 / CMake setup).
+```powershell
+# terminal 1 — API (port 8001)
+python api.py
 
-Optional environment variables:
+# terminal 2 — Vite (port 5172)
+cd frontend
+npm run dev
+```
+
+Open [http://localhost:5172/](http://localhost:5172/). On first start the API loads a textbook snapshot under `examples/data/` if one exists (`*_page_*.trifecta`).
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -30,160 +187,26 @@ Optional environment variables:
 | `OLLAMA_CHAT_TIMEOUT_SECONDS` | `150` | Per agent turn |
 | `TRIFECTA_AGENT_ROUNDS` | `6` | Max tool-call rounds |
 
----
+Index a file from **Library**, then ask exam / figure / web questions in the single chat. Retrieval toggles (HNSW / BM25) live in the sidebar.
 
-## Run the UI
+### HTTP API (what the UI calls)
 
-Two processes, then open [http://localhost:5172/](http://localhost:5172/).
+Base URL with Vite: same origin. Direct: `http://127.0.0.1:8001`.
 
-```powershell
-# terminal 1 — API (port 8001)
-python api.py
-
-# terminal 2 — Vite (port 5172, proxies /chat, /library, /image, …)
-cd frontend
-npm run dev
-```
-
-On first start the API loads the textbook snapshot if one exists under `examples/data/` (`*_page_*.trifecta`). That can take a minute while CLIP loads. The header should show something like **Library · Numerical_Analysis_page_p11-444 · 448 chunks · HNSW+BM25+KG+MMR**.
+| Method | Path | Use |
+|---|---|---|
+| GET | `/health` | Chunks, corpus, retriever label |
+| POST | `/chat` | Agent: `{ mode, messages, question?, attachments? }` |
+| POST | `/upload` | Index PDF/DOCX/TXT/MD/CSV → `{ task_id }` |
+| GET | `/ingest-status/{task_id}` | Poll until `done` / `error` |
+| GET | `/corpora` | Indexed + on-disk sources |
+| GET/POST | `/settings/retrieval` | `{ use_hnsw, use_bm25 }` |
 
 ---
 
-## Using the tutor (browser)
+## Example scripts
 
-There is **one chat**. There is no Study / Math / Research mode picker. The agent picks tools from the question.
-
-### Ask a question
-
-1. Type in the box (Shift+Enter for a new line).
-2. Wait — the first answer after a restart can take about a minute.
-3. Math should render as formulas (KaTeX). The renderer also accepts `\(...\)` and `\[...\]` if the model emits those.
-4. If the library was used, open **Sources** under the reply: source name, page, `gid`, RRF score, and which retrievers ran.
-5. **Used search_corpus · web_search** (or similar) tells you which tools ran.
-
-Typical questions:
-
-- Exam / textbook: *Construct a Lagrange interpolation polynomial \(p_1\) on \([-1,1]\) with \(x_0=-1\), \(x_1=1\).*
-- Figure: *Show the bisection method figure and explain it.*
-- Web: *What is retrieval-augmented generation? Give sources with URLs.*
-
-### Attach vs index
-
-| Control | What it does |
-|---|---|
-| Image / paperclip in the input | **This turn only.** Image, PDF, DOCX, TXT, MD, or CSV is parsed and given to the agent. Images are also matched against the library with CLIP. The file is **not** added as a lasting RAG source. |
-| File-up in the input, or **Library → Index a file** | **Indexes** the file. Builds HNSW and BM25 together (plus KG links for PDFs). The agent can search it on later questions. |
-
-Supported index types: PDF, DOCX, TXT, MD, CSV.
-
-### Library walkthrough (index a laptop file and choose what to search)
-
-1. Sidebar → **Library**.
-2. **Index a file** → pick a PDF/DOCX/notes from your computer. Wait until the row says it is indexed (pages + chunk count).
-3. Each source has **On / Off**. Off means that book is skipped at query time.
-4. Under **Retrieval modes**:
-   - **Vector (HNSW)** — semantic / embedding search.
-   - **Keyword (BM25)** — lexical search.
-   - Both are created on ingest. You can run one or both. At least one must stay on.
-   - **Knowledge graph** stays automatic (1-hop expansion from retrieved seeds). It is not a user toggle.
-5. **Back** to chat and ask. The header shows the active retriever label (`HNSW+BM25+KG+MMR`, `BM25+KG+MMR`, …).
-
-If a PDF is already sitting in `uploaded_pdfs/` or `examples/data/` but is not indexed, Library lists it with **Create RAG DB**.
-
----
-
-## Using the SDK (Python)
-
-```python
-from trifecta import TrifectaClient, PDFIngestor
-from trifecta import trifecta_py as tr
-```
-
-### Ingest text, images, and a PDF
-
-```python
-client = TrifectaClient(device="cpu")
-
-gid = client.add_document(
-    "Lagrange interpolation uses basis polynomials L_i(x).",
-    metadata={"source": "notes", "page": 1},
-)
-client.add_image("figure.png", caption="Bisection interval", metadata={"source": "notes", "page": 2})
-
-# PDF: page mode = one chunk per page + cropped figures. HNSW + BM25 are filled together.
-ingestor = PDFIngestor(client, mode="page")
-stats = ingestor.ingest_pdf("textbook.pdf", output_dir="extracted_images")
-print(stats)  # pages, text_chunks, images, kg_edges
-
-client.add_edge(gid, other_gid, tr.EdgeType.RELATES_TO)  # or EXPLAINS / DEPICTS
-client.save_snapshot("examples/data/my_corpus")  # writes .trifecta + .meta.gz
-```
-
-`mode="classical"` uses overlapping word chunks instead of one page per node.
-
-Reload later:
-
-```python
-client = TrifectaClient.from_snapshot("examples/data/my_corpus.trifecta", device="cpu")
-```
-
-### Query (hybrid, or one retriever)
-
-```python
-# Both HNSW and BM25 (default). KG 1-hop still applies in the C++ engine.
-hits = client.query(text="Lagrange interpolation", top_k=8)
-for row in client.get_results(hits):
-    meta = row["metadata"]
-    print(row["global_id"], row["score"], meta.get("source"), meta.get("page"))
-
-# Keyword only (skip the vector index)
-hits = client.query(text="bisection", top_k=5, use_hnsw=False, use_bm25=True)
-
-# Vector only
-hits = client.query(text="bisection", top_k=5, use_hnsw=True, use_bm25=False)
-
-# Image + text late fusion (CLIP)
-hits = client.query(text="root finding figure", image="scan.png", top_k=5)
-```
-
-Page map:
-
-```python
-print(client.list_sources())
-print(client.list_pages("Numerical_Analysis"))
-print(client.get_page_chunks("Numerical_Analysis", 36))
-print(client.get_chunk_page(209))  # -> ("Numerical_Analysis", 213)
-```
-
-### Same search the tutor uses (MMR + provenance)
-
-```python
-from trifecta.retrieve import hybrid_search, format_passages, serialize_sources
-
-hits = hybrid_search(client, "Lagrange interpolation", top_k=4, use_hnsw=True, use_bm25=True)
-print(serialize_sources(hits))
-# [{global_id, score, source, page, text_preview, retrieval: "HNSW+BM25+KG+MMR"}, ...]
-```
-
-### Tutor agent from Python
-
-```python
-from trifecta.agent import run_agent
-
-result = run_agent(
-    "agent",
-    "Construct p1 in P1 for f on [-1,1] with nodes x0=-1, x1=1.",
-)
-print(result["answer_markdown"])
-print(result["tools_used"])   # e.g. ["search_corpus"]
-print(result["sources"])      # page + gid provenance
-```
-
-`run_agent` is what `POST /chat` calls. It needs `python api.py`’s process (or an import of `api`) so the engine and retrieval toggles are shared.
-
-### Example scripts
-
-From the repo root:
+From the repo root, after `pip install -e ".[pdf,ml]"`:
 
 ```powershell
 python examples/00_basic_usage.py
@@ -192,37 +215,17 @@ python examples/02_query_textbook.py
 python examples/05_page_index_demo.py
 ```
 
-Put a PDF in `examples/data/` (or set `TRIFECTA_TEXTBOOK_PDF`). `01` writes a snapshot; `02` queries it.
+Put a PDF in `examples/data/` or set `TRIFECTA_TEXTBOOK_PDF`.
 
 ---
 
-## HTTP API (what the UI calls)
+## Publishing
 
-Base URL when using Vite: same origin (`/chat` is proxied to `127.0.0.1:8001`). Direct: `http://127.0.0.1:8001`.
+```bash
+pip install build twine
+python -m build
+python -m twine check dist/*
+python -m twine upload dist/*
+```
 
-| Method | Path | Use |
-|---|---|---|
-| GET | `/health` | Chunks, corpus, retriever label |
-| POST | `/chat` | Agent: `{ mode, messages, question?, attachments? }` |
-| POST | `/ask` | Same agent, one question |
-| POST | `/upload` | Index PDF/DOCX/TXT/MD/CSV → `{ task_id }` |
-| GET | `/ingest-status/{task_id}` | Poll until `done` / `error` |
-| POST | `/attach` | Parse a file for this chat turn |
-| GET | `/corpora` | Indexed + on-disk sources |
-| POST | `/corpora/toggle` | `{ name, enabled }` |
-| POST | `/corpora/ingest` | Index a known on-disk PDF |
-| GET/POST | `/settings/retrieval` | `{ use_hnsw, use_bm25 }` |
-| GET | `/image?path=` | Sandboxed figure from extract dirs |
-
----
-
-## How retrieval works (short)
-
-On ingest, **HNSW and BM25 are always built together**. At query time:
-
-1. Optional HNSW (if Vector is on).
-2. Optional BM25 (if Keyword is on).
-3. KG 1-hop from those seeds (always).
-4. Reciprocal rank fusion, then MMR so you do not get four near-duplicate pages.
-
-Provenance on each hit: `source`, `page`, `global_id`, RRF `score`. That is what **Sources** in the UI shows.
+GitHub Releases trigger `.github/workflows/publish.yml` (cibuildwheel + trusted PyPI publishing).

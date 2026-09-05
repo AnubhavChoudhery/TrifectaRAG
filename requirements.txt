@@ -1,3 +1,9 @@
+# Application extras used by the tutor UI (api.py).
+# The installable library + CLI is:
+#   pip install -e ".[all]"
+# or from PyPI:
+#   pip install trifectarag[all]
+
 numpy>=1.24.0
 torch>=2.0.0
 sentence-transformers>=2.2.0
