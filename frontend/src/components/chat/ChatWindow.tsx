@@ -12,6 +12,7 @@ type ChatWindowProps = {
   engineReady?: boolean
   corpusLabel?: string | null
   indexedChunks?: number
+  retrievalLabel?: string
 }
 
 export default function ChatWindow({
@@ -22,6 +23,7 @@ export default function ChatWindow({
   engineReady = false,
   corpusLabel = null,
   indexedChunks = 0,
+  retrievalLabel = 'HNSW+BM25+KG+MMR',
 }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -57,6 +59,7 @@ export default function ChatWindow({
             <span className="max-w-sm truncate text-[11px] text-chat-muted-fg">
               Library · {corpusLabel}
               {indexedChunks ? ` · ${indexedChunks} chunks` : ''}
+              {` · ${retrievalLabel}`}
             </span>
           ) : (
             <span className="text-[11px] text-chat-muted-fg">Open Library to index a source</span>
@@ -68,9 +71,9 @@ export default function ChatWindow({
         {!hasMessages && (
           <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
             <p className="max-w-lg text-sm leading-6 text-chat-muted-fg">
-              Ask a practice question, attach a worksheet image, or drop a PDF/DOCX. I will
-              search the library, pull figures when they help, and look online when the notes
-              are not enough.
+              Ask a practice question, attach a worksheet, or open Library to index a file
+              from your computer. I decide when to search the notes or the web, and I cite
+              the source page when I use the library.
             </p>
           </div>
         )}

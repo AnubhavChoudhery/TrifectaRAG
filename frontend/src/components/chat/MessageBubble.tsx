@@ -48,7 +48,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         {message.sources && message.sources.length > 0 && (
           <details className="pt-2">
             <summary className="cursor-pointer text-[11px] text-chat-muted-fg">
-              Sources · {message.sources.length} · hybrid HNSW+BM25+KG+MMR
+              Sources · {message.sources.length} · {message.sources[0]?.retrieval ?? 'hybrid HNSW+BM25+KG+MMR'}
             </summary>
             <ul className="mt-2 space-y-1.5 text-[12px] leading-5 text-chat-muted-fg">
               {message.sources.slice(0, 8).map((src, i) => (

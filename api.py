@@ -53,6 +53,8 @@ _client: Optional["TrifectaClient"] = None
 _client_lock = Lock()
 _corpus_label = "empty"
 _disabled_sources: set[str] = set()
+_use_hnsw = True
+_use_bm25 = True
 
 # Thread pool for CPU-bound ingestion so the event loop stays unblocked
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -145,6 +147,26 @@ def allowed_sources() -> Optional[set[str]]:
     return names - _disabled_sources
 
 
+def retrieval_settings() -> dict:
+    return {
+        "use_hnsw": _use_hnsw,
+        "use_bm25": _use_bm25,
+        "use_kg": True,
+        "label": _retrieval_label(),
+    }
+
+
+def _retrieval_label() -> str:
+    parts = []
+    if _use_hnsw:
+        parts.append("HNSW")
+    if _use_bm25:
+        parts.append("BM25")
+    parts.append("KG")
+    parts.append("MMR")
+    return "+".join(parts)
+
+
 @app.on_event("startup")
 def warmup_engine() -> None:
     """Start loading ML models in the background so /health responds immediately."""
@@ -187,6 +209,11 @@ class ToggleCorpusRequest(BaseModel):
 
 class IngestKnownRequest(BaseModel):
     filename: str
+
+
+class RetrievalSettingsRequest(BaseModel):
+    use_hnsw: Optional[bool] = None
+    use_bm25: Optional[bool] = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -259,7 +286,9 @@ def health():
         "ollama_model": OLLAMA_MODEL,
         "ollama_url": OLLAMA_URL,
         "agent": True,
-        "retrieval": "hnsw+bm25+kg+rrf+mmr",
+        "retrieval": _retrieval_label(),
+        "use_hnsw": _use_hnsw,
+        "use_bm25": _use_bm25,
         "active_sources": sorted(allowed_sources() or (_client.list_sources() if _client is not None else [])),
         "disabled_sources": sorted(_disabled_sources),
     }
@@ -530,7 +559,33 @@ def list_corpora():
         "snapshots": snapshots,
         "engine_size": engine.size if engine is not None else 0,
         "corpus": _corpus_label,
+        "retrieval": retrieval_settings(),
     }
+
+
+@app.get("/settings/retrieval")
+def get_retrieval_settings():
+    return retrieval_settings()
+
+
+@app.post("/settings/retrieval")
+def set_retrieval_settings(req: RetrievalSettingsRequest):
+    global _use_hnsw, _use_bm25
+    if req.use_hnsw is False and req.use_bm25 is False:
+        raise HTTPException(
+            status_code=400,
+            detail="Keep at least one of Vector (HNSW) or Keyword (BM25) on.",
+        )
+    if req.use_hnsw is not None:
+        _use_hnsw = bool(req.use_hnsw)
+    if req.use_bm25 is not None:
+        _use_bm25 = bool(req.use_bm25)
+    if not _use_hnsw and not _use_bm25:
+        raise HTTPException(
+            status_code=400,
+            detail="Keep at least one of Vector (HNSW) or Keyword (BM25) on.",
+        )
+    return retrieval_settings()
 
 
 @app.post("/corpora/toggle")

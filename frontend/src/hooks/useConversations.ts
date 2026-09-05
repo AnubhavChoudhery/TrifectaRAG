@@ -100,6 +100,7 @@ export function useConversations() {
   const [backendUp, setBackendUp] = useState(false)
   const [corpusLabel, setCorpusLabel] = useState<string | null>(null)
   const [indexedChunks, setIndexedChunks] = useState(0)
+  const [retrievalLabel, setRetrievalLabel] = useState('HNSW+BM25+KG+MMR')
 
   useEffect(() => {
     saveConversations(conversations)
@@ -118,6 +119,7 @@ export function useConversations() {
       setEngineReady(health.indexed_chunks > 0)
       setIndexedChunks(health.indexed_chunks)
       setCorpusLabel(health.corpus && health.corpus !== 'empty' ? health.corpus : null)
+      if (health.retrieval) setRetrievalLabel(health.retrieval)
     }
     void refresh()
     const timer = window.setInterval(refresh, 8000)
@@ -344,6 +346,7 @@ export function useConversations() {
     engineReady,
     corpusLabel,
     indexedChunks,
+    retrievalLabel,
     createConversation,
     deleteConversation,
     selectConversation,

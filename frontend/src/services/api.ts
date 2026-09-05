@@ -45,6 +45,9 @@ export type HealthStatus = {
   page_count?: number
   corpus?: string
   ollama_model?: string
+  retrieval?: string
+  use_hnsw?: boolean
+  use_bm25?: boolean
 }
 
 export type AskResponse = {
@@ -76,11 +79,19 @@ export type CorpusItem = {
   filename?: string | null
 }
 
+export type RetrievalSettings = {
+  use_hnsw: boolean
+  use_bm25: boolean
+  use_kg?: boolean
+  label: string
+}
+
 export type CorporaResponse = {
   items: CorpusItem[]
   snapshots: { name: string; filename: string }[]
   engine_size: number
   corpus: string
+  retrieval?: RetrievalSettings
 }
 
 export type ChatTurn = {
@@ -182,6 +193,29 @@ export async function toggleCorpus(name: string, enabled: boolean): Promise<void
   if (!res.ok) {
     throw new Error(await readApiError(res, backendFallback('Toggle corpus', res.status)))
   }
+}
+
+export async function getRetrievalSettings(): Promise<RetrievalSettings> {
+  const res = await fetch('/settings/retrieval')
+  if (!res.ok) {
+    throw new Error(await readApiError(res, backendFallback('Retrieval settings', res.status)))
+  }
+  return res.json()
+}
+
+export async function setRetrievalSettings(patch: {
+  use_hnsw?: boolean
+  use_bm25?: boolean
+}): Promise<RetrievalSettings> {
+  const res = await fetch('/settings/retrieval', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) {
+    throw new Error(await readApiError(res, backendFallback('Retrieval settings', res.status)))
+  }
+  return res.json()
 }
 
 export async function ingestKnownCorpus(filename: string): Promise<UploadResponse> {

@@ -82,6 +82,28 @@ def _hit_from_result(result: dict) -> dict:
     }
 
 
+def _active_flags() -> tuple[bool, bool, str]:
+    try:
+        import api as api_mod
+
+        settings = api_mod.retrieval_settings()
+        use_hnsw = bool(settings.get("use_hnsw", True))
+        use_bm25 = bool(settings.get("use_bm25", True))
+        return use_hnsw, use_bm25, settings.get("label") or _label(use_hnsw, use_bm25)
+    except Exception:
+        return True, True, "HNSW+BM25+KG+MMR"
+
+
+def _label(use_hnsw: bool, use_bm25: bool) -> str:
+    parts = []
+    if use_hnsw:
+        parts.append("HNSW")
+    if use_bm25:
+        parts.append("BM25")
+    parts.extend(["KG", "MMR"])
+    return "+".join(parts)
+
+
 def hybrid_search(
     engine: Any,
     query: str,
@@ -89,17 +111,30 @@ def hybrid_search(
     allowed_sources: set[str] | None = None,
     image: str | None = None,
     fetch: int = 16,
+    use_hnsw: bool | None = None,
+    use_bm25: bool | None = None,
 ) -> list[dict]:
     """Query the fused engine, drop disabled sources, then MMR-trim."""
     if engine is None or getattr(engine, "size", 0) == 0:
         return []
+    flag_hnsw, flag_bm25, label = _active_flags()
+    if use_hnsw is None:
+        use_hnsw = flag_hnsw
+    if use_bm25 is None:
+        use_bm25 = flag_bm25
     k = max(1, min(int(top_k or 4), 8))
     raw = engine.query(
         text=query or None,
         image=image,
         top_k=max(fetch, k * 4),
+        use_hnsw=use_hnsw,
+        use_bm25=use_bm25,
     )
     hits = [_hit_from_result(r) for r in engine.get_results(raw)]
+    for hit in hits:
+        hit["retrieval"] = label
+        if hit.get("raw") is not None:
+            hit["raw"]["retrieval"] = label
     if allowed_sources is not None:
         hits = [
             h for h in hits
@@ -119,7 +154,7 @@ def format_passages(hits: list[dict], excerpt_fn) -> str:
         gid = hit.get("global_id")
         score = hit.get("score") or 0.0
         blocks.append(
-            f"[{i}] {hit.get('source')}, {page_s} · gid={gid} · rrf={score:.4f} · hybrid=HNSW+BM25+KG+MMR\n"
+            f"[{i}] {hit.get('source')}, {page_s} · gid={gid} · rrf={score:.4f} · hybrid={hit.get('retrieval') or 'HNSW+BM25+KG+MMR'}\n"
             f"{excerpt}"
         )
     return "\n\n".join(blocks)
@@ -136,6 +171,6 @@ def serialize_sources(hits: list[dict]) -> list[dict]:
             "page": hit.get("page"),
             "text_preview": (hit.get("text") or "")[:240],
             "image_path": hit.get("image_path"),
-            "retrieval": "hnsw+bm25+kg+rrf+mmr",
+            "retrieval": hit.get("retrieval") or "HNSW+BM25+KG+MMR",
         })
     return out

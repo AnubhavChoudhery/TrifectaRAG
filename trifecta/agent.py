@@ -746,7 +746,7 @@ def _serialize_sources(raw: list) -> list:
             "page": page,
             "text_preview": preview[:240],
             "image_path": r.get("image_path") or meta.get("image_path"),
-            "retrieval": r.get("retrieval") or "hnsw+bm25+kg+rrf+mmr",
+            "retrieval": r.get("retrieval") or "HNSW+BM25+KG+MMR",
         })
     return out
 

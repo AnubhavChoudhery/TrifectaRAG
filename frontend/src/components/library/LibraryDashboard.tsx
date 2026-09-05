@@ -4,9 +4,11 @@ import {
   getIngestStatus,
   ingestKnownCorpus,
   listCorpora,
+  setRetrievalSettings,
   toggleCorpus,
   uploadDocumentFile,
   type CorpusItem,
+  type RetrievalSettings,
 } from '../../services/api'
 
 type LibraryDashboardProps = {
@@ -16,6 +18,11 @@ type LibraryDashboardProps = {
 export default function LibraryDashboard({ onBack }: LibraryDashboardProps) {
   const [items, setItems] = useState<CorpusItem[]>([])
   const [engineSize, setEngineSize] = useState(0)
+  const [retrieval, setRetrieval] = useState<RetrievalSettings>({
+    use_hnsw: true,
+    use_bm25: true,
+    label: 'HNSW+BM25+KG+MMR',
+  })
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -25,6 +32,7 @@ export default function LibraryDashboard({ onBack }: LibraryDashboardProps) {
       const data = await listCorpora()
       setItems(data.items)
       setEngineSize(data.engine_size)
+      if (data.retrieval) setRetrieval(data.retrieval)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load the library.')
@@ -45,6 +53,25 @@ export default function LibraryDashboard({ onBack }: LibraryDashboardProps) {
       }
     }
     throw new Error('Indexing timed out')
+  }
+
+  const handleRetrieval = async (which: 'hnsw' | 'bm25') => {
+    const nextHnsw = which === 'hnsw' ? !retrieval.use_hnsw : retrieval.use_hnsw
+    const nextBm25 = which === 'bm25' ? !retrieval.use_bm25 : retrieval.use_bm25
+    if (!nextHnsw && !nextBm25) {
+      setError('Keep at least one of Vector (HNSW) or Keyword (BM25) on.')
+      return
+    }
+    setBusy('retrieval')
+    try {
+      const updated = await setRetrievalSettings({ use_hnsw: nextHnsw, use_bm25: nextBm25 })
+      setRetrieval(updated)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update retrieval modes.')
+    } finally {
+      setBusy(null)
+    }
   }
 
   const handleToggle = async (item: CorpusItem) => {
@@ -102,7 +129,7 @@ export default function LibraryDashboard({ onBack }: LibraryDashboardProps) {
           <div>
             <h2 className="text-sm font-semibold text-chat-fg">Library</h2>
             <p className="text-[11px] text-chat-muted-fg">
-              {engineSize} chunks in the live index · hybrid HNSW + BM25 + KG + MMR
+              {engineSize} chunks · search with {retrieval.label}
             </p>
           </div>
         </div>
@@ -132,9 +159,44 @@ export default function LibraryDashboard({ onBack }: LibraryDashboardProps) {
 
       <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
         <p className="mb-4 max-w-2xl text-sm leading-6 text-chat-muted-fg">
-          Turn sources on or off for retrieval. Index another textbook or notes (PDF, DOCX, TXT)
-          to add a RAG database without leaving chat.
+          Index a file from your computer, then turn that source on or off for retrieval.
+          Vector (HNSW) and keyword (BM25) indexes are built together; pick which ones the
+          agent searches. Knowledge-graph expansion stays on automatically.
         </p>
+        <div className="mb-6 rounded-xl border border-chat-border bg-chat-surface px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-chat-muted-fg">
+            Retrieval modes
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void handleRetrieval('hnsw')}
+              disabled={Boolean(busy)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                retrieval.use_hnsw
+                  ? 'bg-chat-accent/15 text-chat-accent'
+                  : 'bg-chat-muted text-chat-muted-fg'
+              }`}
+            >
+              Vector (HNSW) {retrieval.use_hnsw ? 'On' : 'Off'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRetrieval('bm25')}
+              disabled={Boolean(busy)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                retrieval.use_bm25
+                  ? 'bg-chat-accent/15 text-chat-accent'
+                  : 'bg-chat-muted text-chat-muted-fg'
+              }`}
+            >
+              Keyword (BM25) {retrieval.use_bm25 ? 'On' : 'Off'}
+            </button>
+            <span className="rounded-lg bg-chat-muted px-3 py-1.5 text-xs text-chat-muted-fg">
+              Knowledge graph · auto
+            </span>
+          </div>
+        </div>
         {error && <p className="mb-4 text-sm text-red-400">{error}</p>}
         {busy && (
           <p className="mb-4 inline-flex items-center gap-2 text-sm text-chat-muted-fg">

@@ -15,6 +15,7 @@ export default function ChatLayout() {
     engineReady,
     corpusLabel,
     indexedChunks,
+    retrievalLabel,
     createConversation,
     deleteConversation,
     selectConversation,
@@ -80,6 +81,7 @@ export default function ChatLayout() {
             engineReady={engineReady}
             corpusLabel={corpusLabel}
             indexedChunks={indexedChunks}
+            retrievalLabel={retrievalLabel}
           />
         )}
       </main>

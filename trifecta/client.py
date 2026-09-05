@@ -527,6 +527,8 @@ class TrifectaClient:
         image: Optional[ImageInput] = None,
         top_k: int = 10,
         search_ef: int = 50,
+        use_hnsw: bool = True,
+        use_bm25: bool = True,
     ) -> List[Tuple[int, float]]:
         """
         Multi-modal query with optional late fusion.
@@ -542,6 +544,8 @@ class TrifectaClient:
             image:     Query image path or PIL Image (drives HNSW).
             top_k:     Maximum results to return.
             search_ef: HNSW search ef parameter.
+            use_hnsw:  If False, skip vector search (empty query_vec).
+            use_bm25:  If False, skip lexical search (empty query_text).
 
         Returns:
             List of (global_id, rrf_score) tuples, descending by score.
@@ -549,18 +553,22 @@ class TrifectaClient:
         if text is None and image is None:
             return []
 
-        query_text = text or ""
+        query_text = (text or "") if use_bm25 else ""
         query_vec: List[float] = []
 
-        if text is not None and image is not None:
-            text_vec = _normalize(self._embed_text(text))
-            img_vec = _normalize(self._embed_image(self._load_image(image)))
-            fused = _normalize(text_vec + img_vec)
-            query_vec = fused.tolist()
-        elif image is not None:
-            query_vec = self._embed_image(self._load_image(image)).tolist()
-        elif text is not None:
-            query_vec = self._embed_text(text).tolist()
+        if use_hnsw:
+            if text is not None and image is not None:
+                text_vec = _normalize(self._embed_text(text))
+                img_vec = _normalize(self._embed_image(self._load_image(image)))
+                fused = _normalize(text_vec + img_vec)
+                query_vec = fused.tolist()
+            elif image is not None:
+                query_vec = self._embed_image(self._load_image(image)).tolist()
+            elif text is not None:
+                query_vec = self._embed_text(text).tolist()
+
+        if not query_vec and not query_text:
+            return []
 
         return self._engine.query(
             query_vec=query_vec,

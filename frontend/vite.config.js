@@ -11,6 +11,7 @@ export default defineConfig({
       '/upload': { target: 'http://127.0.0.1:8001', timeout: 360_000, proxyTimeout: 360_000 },
       '/attach': { target: 'http://127.0.0.1:8001', timeout: 360_000, proxyTimeout: 360_000 },
       '/corpora': { target: 'http://127.0.0.1:8001', timeout: 360_000, proxyTimeout: 360_000 },
+      '/settings': { target: 'http://127.0.0.1:8001' },
       '/ingest-status': { target: 'http://127.0.0.1:8001' },
       '/ask': { target: 'http://127.0.0.1:8001', timeout: 360_000, proxyTimeout: 360_000 },
       '/chat': { target: 'http://127.0.0.1:8001', timeout: 360_000, proxyTimeout: 360_000 },
